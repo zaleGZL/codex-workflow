@@ -106,6 +106,25 @@ function startDashboard(state, opts) {
   if (opts.port) args.push("--port", String(opts.port));
   if (opts.open === false) args.push("--no-open");
   args.push("--exit-on-done", "true");
-  const child = spawn(process.execPath, args, { detached: true, stdio: "ignore" });
+  const child = spawn(process.execPath, args, { detached: true, stdio: ["ignore", "pipe", "ignore"] });
   child.unref();
+  return new Promise(resolve => {
+    let output = "";
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      const match = output.match(/Codex workflow dashboard: (http:\/\/127\.0\.0\.1:\d+\/)/);
+      if (match) console.log(`Codex workflow dashboard: ${match[1]}`);
+      child.stdout.destroy();
+      resolve();
+    };
+    child.stdout.on("data", chunk => {
+      output += chunk;
+      if (output.includes("Codex workflow dashboard:")) done();
+    });
+    child.on("error", done);
+    child.on("exit", done);
+    setTimeout(done, 2000).unref();
+  });
 }

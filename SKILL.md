@@ -20,7 +20,9 @@ Before running a workflow:
 node scripts/cli.mjs run <workflow.js> --cwd <repo>
 ```
 
-`run` starts the dashboard server immediately and opens it in the browser. Use `serve` only when reopening an existing run.
+In the Codex app, pass `--no-open`, read the printed `Codex workflow dashboard: <url>` line, and open that URL in the in-app Browser when Browser is available. If Browser is unavailable, show the URL to the user as a link.
+
+`run` starts the dashboard server immediately and prints its URL. Without `--no-open`, it also opens the default system browser. Use `serve` only when reopening an existing run.
 
 Use `pause`, `resume`, `status`, and `list` from the same CLI for run control.
 
