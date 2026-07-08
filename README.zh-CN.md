@@ -68,6 +68,9 @@ node scripts/cli.mjs status <run-id> --cwd .
 node scripts/cli.mjs serve <run-id> --cwd . --port 8765
 ```
 
+`serve` 会自动在浏览器中打开 dashboard。无头环境或测试时可以加 `--no-open`。
+默认优先使用 `8765`，如果多个 dashboard 同时运行，会自动尝试下一个可用端口。如果显式传了 `--port`，端口冲突会直接失败。
+
 暂停和继续：
 
 ```bash

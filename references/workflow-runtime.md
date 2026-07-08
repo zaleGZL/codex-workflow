@@ -70,6 +70,9 @@ Start:
 node scripts/cli.mjs serve <run-id>
 ```
 
+`serve` opens the dashboard in the default browser automatically. Pass `--no-open` when running in a headless environment.
+It prefers port `8765` and falls back to the next free port unless `--port` was explicitly provided.
+
 Routes:
 
 - `/`: dashboard.

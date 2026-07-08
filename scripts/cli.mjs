@@ -48,9 +48,12 @@ async function main() {
   }
   if (command === "serve") {
     const runId = args.shift();
-    if (!runId) throw new Error("usage: codex-workflow serve <run-id> [--cwd <path>] [--port <port>]");
+    if (!runId) throw new Error("usage: codex-workflow serve <run-id> [--cwd <path>] [--port <port>] [--no-open]");
     const opts = parseOpts(args);
-    serve(path.resolve(opts.cwd ?? process.cwd()), runId, Number(opts.port ?? 8765));
+    await serve(path.resolve(opts.cwd ?? process.cwd()), runId, opts.port ? Number(opts.port) : undefined, {
+      open: opts.open !== false,
+      portExplicit: Boolean(opts.port),
+    });
     return;
   }
   if (command === "list") {
@@ -72,6 +75,10 @@ function parseOpts(values) {
   for (let i = 0; i < values.length; i += 1) {
     const key = values[i];
     if (!key.startsWith("--")) throw new Error(`unexpected argument: ${key}`);
+    if (key.startsWith("--no-")) {
+      opts[key.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = false;
+      continue;
+    }
     opts[key.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = values[++i];
   }
   return opts;
@@ -83,7 +90,7 @@ function help() {
 Commands:
   run <workflow.js> [--cwd <path>] [--concurrency <n>] [--model <model>] [--worktree auto|always|never]
   status <run-id> [--cwd <path>]
-  serve <run-id> [--cwd <path>] [--port <port>]
+  serve <run-id> [--cwd <path>] [--port <port>] [--no-open]
   pause <run-id> [--cwd <path>]
   resume <run-id> [--cwd <path>]
   list [--cwd <path>]`);

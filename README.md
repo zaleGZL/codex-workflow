@@ -68,6 +68,9 @@ Open the dashboard:
 node scripts/cli.mjs serve <run-id> --cwd . --port 8765
 ```
 
+`serve` opens the dashboard in your browser automatically. Use `--no-open` for headless or test runs.
+By default it prefers port `8765` and automatically falls back to the next free port when multiple dashboards are running. If you pass `--port`, that port is treated as explicit and a conflict fails fast.
+
 Pause and resume:
 
 ```bash

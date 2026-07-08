@@ -1,9 +1,10 @@
 import http from "node:http";
+import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { clearPause, requestPause, resumeRun } from "./runtime.mjs";
 import { readState } from "./state.mjs";
 
-export function serve(cwd, runId, port = 8765) {
+export async function serve(cwd, runId, port = undefined, options = {}) {
   const server = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, `http://${req.headers.host}`);
@@ -29,11 +30,54 @@ export function serve(cwd, runId, port = 8765) {
       res.end(error.stack || error.message);
     }
   });
-  server.listen(port, () => {
-    const actualPort = server.address().port;
-    console.log(`Codex workflow dashboard: http://127.0.0.1:${actualPort}/`);
-  });
+  await listen(server, port, options.portExplicit === true);
+  const actualPort = server.address().port;
+  const url = `http://127.0.0.1:${actualPort}/`;
+  console.log(`Codex workflow dashboard: ${url}`);
+  if (options.open !== false) openBrowser(url);
   return server;
+}
+
+function listen(server, port, explicit) {
+  const start = Number(port ?? 8765);
+  return new Promise((resolve, reject) => {
+    const tryPort = candidate => {
+      const onError = error => {
+        server.off("listening", onListening);
+        if (error.code === "EADDRINUSE" && !explicit && candidate < start + 100) {
+          tryPort(candidate + 1);
+          return;
+        }
+        reject(error);
+      };
+      const onListening = () => {
+        server.off("error", onError);
+        resolve(candidate);
+      };
+      server.once("error", onError);
+      server.once("listening", onListening);
+      server.listen(candidate, "127.0.0.1");
+    };
+    tryPort(start);
+  });
+}
+
+export function openBrowser(url) {
+  let command;
+  let args;
+  if (process.platform === "darwin") {
+    command = "open";
+    args = [url];
+  } else if (process.platform === "win32") {
+    command = "cmd";
+    args = ["/c", "start", "", url];
+  } else {
+    command = "xdg-open";
+    args = [url];
+  }
+  const child = spawn(command, args, { stdio: "ignore", detached: true });
+  child.on("error", () => {});
+  child.unref();
 }
 
 async function safeRead(file) {
