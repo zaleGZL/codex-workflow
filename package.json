@@ -1,0 +1,17 @@
+{
+  "name": "codex-workflow",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "codex-workflow": "scripts/cli.mjs"
+  },
+  "scripts": {
+    "dev": "node scripts/dev-sync-skill.mjs",
+    "sync:skill": "node scripts/dev-sync-skill.mjs --once",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

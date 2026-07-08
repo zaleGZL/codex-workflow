@@ -1,0 +1,3 @@
+display_name: Codex Workflow
+short_description: Run parallel Codex CLI subagent workflows with dashboard status.
+default_prompt: Create and run a Codex workflow for this task, using subagents where useful and showing me how to monitor it.
