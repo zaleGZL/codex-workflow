@@ -6,6 +6,24 @@
 
 [English README](README.md)
 
+## 用户怎么使用
+
+普通用户不需要手动执行 CLI。安装 skill 之后，在 Codex 输入框里点名这个 skill，并说明要完成的任务即可：
+
+```text
+Use codex-workflow to audit all route handlers for missing auth checks.
+```
+
+```text
+使用 codex-workflow，把所有内部 fetch 调用迁移到 HttpClient wrapper。
+```
+
+```text
+用 codex-workflow 研究这个仓库的架构，并总结高风险区域。
+```
+
+之后 Codex 会判断是否需要 workflow，生成 workflow 脚本，调用本地 runtime 执行，并给出 dashboard 地址查看进度。下面的 CLI 命令主要是给开发和调试用的实现细节。
+
 ## 环境要求
 
 - Node.js 20+
@@ -30,7 +48,7 @@ npm run dev
 
 dev 同步不会删除运行状态。它只替换 `~/.codex/skills/codex-workflow` 下受管理的 skill 文件，并保留 `.codex/`、workflow runs 和其他运行时文件。
 
-## CLI
+## 开发和调试用 CLI
 
 运行 workflow：
 

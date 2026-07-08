@@ -7,6 +7,8 @@ description: Create, run, and monitor Codex CLI workflows that fan out work to m
 
 Use this skill when a task is too large or parallel for one Codex conversation.
 
+The user should only describe the desired task in Codex. Do not ask the user to run the CLI unless they explicitly want manual control. Treat the CLI as this skill's internal runtime.
+
 Before running a workflow:
 
 1. Split the task into agent jobs.

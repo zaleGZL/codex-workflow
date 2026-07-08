@@ -6,6 +6,24 @@ It is built for large tasks such as codebase audits, migrations, cross-checked r
 
 [中文说明](README.zh-CN.md)
 
+## User Usage
+
+End users do not need to run the CLI directly. After the skill is installed, use it from the Codex input box by naming the skill and describing the task:
+
+```text
+Use codex-workflow to audit all route handlers for missing auth checks.
+```
+
+```text
+Use codex-workflow to migrate all internal fetch calls to the HttpClient wrapper.
+```
+
+```text
+Use codex-workflow to research the architecture of this repo and summarize the risky areas.
+```
+
+Codex decides whether a workflow is useful, generates the workflow script, runs the local runtime, and shows the dashboard URL for progress. The CLI commands below are for development and debugging.
+
 ## Requirements
 
 - Node.js 20+
@@ -30,7 +48,7 @@ npm run dev
 
 The dev sync preserves runtime state. It only replaces managed skill files in `~/.codex/skills/codex-workflow` and keeps `.codex/`, workflow runs, and other runtime files.
 
-## CLI
+## CLI For Development And Debugging
 
 Run a workflow:
 
