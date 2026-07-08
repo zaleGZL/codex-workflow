@@ -82,6 +82,68 @@ Options:
 
 It handles done edit agents that used a worktree. It runs `git diff --binary HEAD` in each worktree, then applies each patch to the workflow cwd with `git apply --3way`. It returns `{ status, label, applied, skipped, failed }`. Non-worktree edit agents are skipped because they already edited the workflow cwd directly.
 
+`task(title, options)` adds a shared task to the run bus and returns the task id.
+
+Options:
+
+- `id`: explicit id. Defaults to `task-001`, `task-002`, ...
+- `assignee`: optional target agent label/id.
+- `status`: initial status, default `"pending"`.
+
+`taskDone(id, result)` marks a shared task done and stores an optional result.
+
+`message(to, text, options)` adds a teammate message. `to` can be an agent label, agent id, or `"*"` for all future agents. `options.from` defaults to `"workflow"`.
+
+`context(text, options)` adds a shared context item. `options.source` defaults to `"workflow"`.
+
+`readBus()` returns the current `{ tasks, messages, context }` bus.
+
+Before each agent spawn, the runtime appends a concise `Workflow shared context` block to the prompt. It includes up to 20 open tasks, 20 messages addressed to that agent label/id or `"*"`, and 20 latest context items.
+
+## Hooks
+
+Workflows can export deterministic command hooks:
+
+```js
+export const hooks = {
+  beforeRun: [{ command: "npm test", label: "preflight" }],
+  beforeAgent: [{ command: "node scripts/inject-context.mjs", inject: "prompt" }],
+  afterAgent: [{ command: "npm run lint", onFailure: "warn" }],
+  afterRun: [{ command: "node scripts/notify.mjs", onFailure: "warn" }],
+};
+```
+
+Supported events:
+
+- `beforeRun`: runs before the default workflow function. Blocking failures fail the run before agents spawn.
+- `beforeAgent`: runs before `codex exec` spawns. Blocking failures fail that agent.
+- `afterAgent`: runs after an agent exits. Blocking failures mark that agent failed.
+- `afterRun`: runs after the workflow result is written. Use `onFailure: "warn"` for notifications and cleanup that should not change the run outcome.
+
+Hook handlers support:
+
+- `command`: shell command to run in the workflow cwd.
+- `label`: display label in `steps`.
+- `onFailure`: `"block"` by default, or `"warn"` to record a warning and continue.
+- `inject`: set to `"prompt"` on `beforeAgent` to append returned context to the agent prompt.
+- `timeout`: milliseconds, or seconds when less than 1000.
+
+Each hook receives JSON on stdin:
+
+```json
+{
+  "run_id": "20260708120000-demo",
+  "cwd": "/repo",
+  "event": "beforeAgent",
+  "state_path": "/home/me/.codex/codex-workflow/runs/.../state.json",
+  "bus_path": "/home/me/.codex/codex-workflow/runs/.../bus.json",
+  "agent": {},
+  "result": {}
+}
+```
+
+If stdout is JSON, `{ "ok": false, "reason": "..." }` blocks or warns per `onFailure`. A `beforeAgent` hook with `inject: "prompt"` can return `{ "context": "..." }` to add deterministic prompt context.
+
 ## Worktree Strategy
 
 Explicit `worktree` wins. Otherwise `auto` is used:
@@ -122,6 +184,8 @@ Runtime files are stored outside target repositories:
 ~/.codex/codex-workflow/worktrees/<run-id>/<agent-id>/
 ```
 
+`bus.json` lives next to `state.json` and stores shared tasks, messages, and context for the run.
+
 Routes:
 
 - `/`: dashboard.
@@ -135,7 +199,8 @@ Routes:
 
 `state.json` also includes `steps`, which records non-agent helper calls such as `verify` and `review`.
 `applyEdits` records an `apply-edits` step with per-agent apply results.
+Hooks record `hook` steps with event, label, command, status, stdout, stderr, and exit code.
 
 ## Limits
 
-V1 does not use `codex apply`, automatically roll back partially applied edit patches, rerun individual agents while the run is still running, or guarantee conflict-free edits when `worktree: "never"` is forced.
+V1 does not use `codex apply`, automatically roll back partially applied edit patches, rerun individual agents while the run is still running, or guarantee conflict-free edits when `worktree: "never"` is forced. Hooks are command-only. The shared bus is run-local and injected only when the next one-shot agent starts; it is not a live teammate session or real-time message channel.

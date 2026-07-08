@@ -1,7 +1,9 @@
 import { pathToFileURL } from "node:url";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { busPath, ensureBus, initBus, nextBusId, readBus as readWorkflowBus, updateBus } from "./bus.mjs";
 import { buildReviewCommand, ensureCodexInstalled, runCodexAgent, runCommand } from "./codex.mjs";
+import { runHooks } from "./hooks.mjs";
 import { readState, runDir, statePath, writeJsonAtomic, writeState } from "./state.mjs";
 import { applyPatch, createWorktree, diffWorktree, isGitRepo, shouldUseWorktree } from "./worktree.mjs";
 
@@ -19,6 +21,7 @@ export async function createRun(workflowFile, opts = {}) {
   const runId = opts.runId ?? makeRunId(name);
   const dir = runDir(cwd, runId);
   await mkdir(dir, { recursive: true });
+  await initBus(cwd, runId);
   const savedWorkflow = path.join(dir, "workflow.js");
   await copyFile(source, savedWorkflow);
   const state = {
@@ -29,6 +32,7 @@ export async function createRun(workflowFile, opts = {}) {
     workflow_path: savedWorkflow,
     status: "running",
     pause_requested: false,
+    bus_path: busPath(cwd, runId),
     started_at: new Date().toISOString(),
     ended_at: null,
     phases: [],
@@ -44,7 +48,9 @@ export async function createRun(workflowFile, opts = {}) {
 
 export async function resumeRun(cwd, runId, opts = {}) {
   await ensureCodexInstalled();
+  await ensureBus(cwd, runId);
   const state = await readState(cwd, runId);
+  state.bus_path ??= busPath(cwd, runId);
   for (const agent of state.agents) {
     if (agent.status === "running") agent.status = "stale";
   }
@@ -127,12 +133,20 @@ async function runWorkflow(cwd, runId, opts) {
   globalThis.verify = runtime.verify.bind(runtime);
   globalThis.review = runtime.review.bind(runtime);
   globalThis.applyEdits = runtime.applyEdits.bind(runtime);
+  globalThis.task = runtime.task.bind(runtime);
+  globalThis.taskDone = runtime.taskDone.bind(runtime);
+  globalThis.message = runtime.message.bind(runtime);
+  globalThis.context = runtime.context.bind(runtime);
+  globalThis.readBus = runtime.readBus.bind(runtime);
   try {
     const workflow = await import(`${pathToFileURL(state.workflow_path).href}?run=${Date.now()}`);
+    runtime.hooks = normalizeHooks(workflow.hooks);
     const withMeta = await readState(cwd, runId);
     if (workflow.meta?.name) withMeta.name = workflow.meta.name;
     if (workflow.meta?.description) withMeta.description = workflow.meta.description;
+    withMeta.bus_path ??= busPath(cwd, runId);
     await writeState(cwd, withMeta);
+    await runtime.runHookEvent("beforeRun");
     let result = null;
     if (typeof workflow.default === "function") {
       result = await workflow.default({
@@ -141,6 +155,11 @@ async function runWorkflow(cwd, runId, opts) {
         verify: globalThis.verify,
         review: globalThis.review,
         applyEdits: globalThis.applyEdits,
+        task: globalThis.task,
+        taskDone: globalThis.taskDone,
+        message: globalThis.message,
+        context: globalThis.context,
+        readBus: globalThis.readBus,
       });
     }
     const latest = await readState(cwd, runId);
@@ -149,7 +168,8 @@ async function runWorkflow(cwd, runId, opts) {
     else latest.status = latest.agents.some(a => a.status === "failed") ? "failed" : "done";
     latest.ended_at = new Date().toISOString();
     await writeState(cwd, latest);
-    return latest;
+    await runtime.runHookEvent("afterRun", { result }, { defaultOnFailure: "warn" });
+    return readState(cwd, runId);
   } catch (error) {
     const latest = await readState(cwd, runId);
     if (latest.pause_requested && hasPending(latest)) latest.status = "paused";
@@ -165,6 +185,11 @@ async function runWorkflow(cwd, runId, opts) {
     delete globalThis.verify;
     delete globalThis.review;
     delete globalThis.applyEdits;
+    delete globalThis.task;
+    delete globalThis.taskDone;
+    delete globalThis.message;
+    delete globalThis.context;
+    delete globalThis.readBus;
   }
 }
 
@@ -185,6 +210,7 @@ class Runtime {
     this.captureId = null;
     this.capturedCall = null;
     this.stateQueue = Promise.resolve();
+    this.hooks = {};
   }
 
   async agent(prompt, options = {}) {
@@ -320,6 +346,62 @@ class Runtime {
     return summary;
   }
 
+  async task(title, options = {}) {
+    return updateBus(this.cwd, this.runId, bus => {
+      const id = options.id ?? nextBusId("task", bus.tasks);
+      bus.tasks.push({
+        id,
+        title: String(title),
+        status: options.status ?? "pending",
+        assignee: options.assignee,
+        created_at: new Date().toISOString(),
+      });
+      return id;
+    });
+  }
+
+  async taskDone(id, result = null) {
+    return updateBus(this.cwd, this.runId, bus => {
+      const task = bus.tasks.find(item => item.id === id);
+      if (!task) throw new Error(`task not found: ${id}`);
+      task.status = "done";
+      task.result = result;
+      task.ended_at = new Date().toISOString();
+      return task;
+    });
+  }
+
+  async message(to, text, options = {}) {
+    return updateBus(this.cwd, this.runId, bus => {
+      const id = options.id ?? nextBusId("message", bus.messages);
+      bus.messages.push({
+        id,
+        to: String(to),
+        from: options.from ?? "workflow",
+        text: String(text),
+        created_at: new Date().toISOString(),
+      });
+      return id;
+    });
+  }
+
+  async context(text, options = {}) {
+    return updateBus(this.cwd, this.runId, bus => {
+      const id = options.id ?? nextBusId("context", bus.context);
+      bus.context.push({
+        id,
+        text: String(text),
+        source: options.source ?? "workflow",
+        created_at: new Date().toISOString(),
+      });
+      return id;
+    });
+  }
+
+  async readBus() {
+    return readWorkflowBus(this.cwd, this.runId);
+  }
+
   nextAgentId() {
     return `agent-${String(++this.agentSeq).padStart(3, "0")}`;
   }
@@ -393,6 +475,16 @@ class Runtime {
         return { status: "failed", id: agent.id, error: agent.error };
       }
     }
+    try {
+      const hookContext = await this.runHookEvent("beforeAgent", { agent });
+      agent.prompt = await this.withSharedContext(agent, hookContext);
+    } catch (error) {
+      agent.status = "failed";
+      agent.error = error.message;
+      agent.ended_at = new Date().toISOString();
+      await this.upsertAgent(agent);
+      return { status: "failed", id: agent.id, error: error.message };
+    }
     await this.upsertAgent(agent);
     const result = await runCodexAgent(agent, workdir, {
       onPid: pid => this.upsertAgent({ id: agent.id, pid }),
@@ -413,6 +505,10 @@ class Runtime {
       ended_at: new Date().toISOString(),
     };
     await this.upsertAgent(finalAgent);
+    const afterHook = await this.finishAfterAgentHooks(finalAgent, result);
+    if (afterHook?.status === "failed") {
+      return { status: "failed", id: finalAgent.id, error: afterHook.error };
+    }
     return result.exitCode === 0
       ? readAgentResult(finalAgent)
       : stopped
@@ -464,6 +560,88 @@ class Runtime {
     });
     return this.stateQueue;
   }
+
+  async runHookEvent(event, extra = {}, options = {}) {
+    const handlers = this.hooks[event] ?? [];
+    if (!handlers.length) return "";
+    const payload = {
+      run_id: this.runId,
+      cwd: this.cwd,
+      event,
+      state_path: statePath(this.cwd, this.runId),
+      bus_path: busPath(this.cwd, this.runId),
+      agent: extra.agent,
+      result: extra.result,
+    };
+    const outcome = await runHooks(event, handlers, payload, { cwd: this.cwd, ...options });
+    for (const result of outcome.results) {
+      await this.upsertStep({
+        ...this.newStep("hook", result.label, {
+          event,
+          command: result.command,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          reason: result.reason,
+          timed_out: result.timed_out,
+        }),
+        status: result.status,
+        started_at: result.started_at,
+        ended_at: result.ended_at,
+        exit_code: result.exit_code,
+      });
+    }
+    if (outcome.blocked) throw new Error(`hook ${event} blocked: ${outcome.reason}`);
+    return outcome.context;
+  }
+
+  async finishAfterAgentHooks(agent, result) {
+    try {
+      await this.runHookEvent("afterAgent", { agent, result });
+      return null;
+    } catch (error) {
+      const latestAgent = {
+        ...agent,
+        status: "failed",
+        error: error.message,
+        ended_at: new Date().toISOString(),
+      };
+      await this.upsertAgent(latestAgent);
+      return { status: "failed", error: error.message };
+    }
+  }
+
+  async withSharedContext(agent, hookContext) {
+    const additions = [];
+    const busContext = await this.renderBusContext(agent);
+    if (busContext) additions.push(busContext);
+    if (hookContext?.trim()) additions.push(["Workflow hook context:", hookContext.trim()].join("\n"));
+    if (!additions.length) return agent.prompt;
+    return `${agent.prompt.trimEnd()}\n\n${additions.join("\n\n")}\n`;
+  }
+
+  async renderBusContext(agent) {
+    const bus = await readWorkflowBus(this.cwd, this.runId);
+    const tasks = bus.tasks.filter(task => task.status !== "done").slice(-20);
+    const messages = bus.messages
+      .filter(message => ["*", agent.id, agent.label].includes(message.to))
+      .slice(-20);
+    const context = bus.context.slice(-20);
+    if (!tasks.length && !messages.length && !context.length) return "";
+    const lines = ["Workflow shared context:"];
+    if (tasks.length) {
+      lines.push("Tasks:");
+      for (const task of tasks) lines.push(`- [${task.id}] ${task.title} (${task.status})`);
+    }
+    if (messages.length) {
+      lines.push("Messages:");
+      for (const message of messages) lines.push(`- ${message.from} -> ${message.to}: ${message.text}`);
+    }
+    if (context.length) {
+      lines.push("Context:");
+      for (const item of context) lines.push(`- ${item.text}`);
+    }
+    return lines.join("\n");
+  }
 }
 
 function isWorktreePath(value) {
@@ -509,6 +687,11 @@ function processExists(pid) {
   } catch {
     return false;
   }
+}
+
+function normalizeHooks(hooks = {}) {
+  const events = ["beforeRun", "beforeAgent", "afterAgent", "afterRun"];
+  return Object.fromEntries(events.map(event => [event, Array.isArray(hooks[event]) ? hooks[event] : []]));
 }
 
 function normalizeJob(id, prompt, options, runtime) {

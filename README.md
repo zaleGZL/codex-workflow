@@ -144,6 +144,33 @@ export default async ({ agent, applyEdits, verify, review }) => {
 };
 ```
 
+Workflow hooks run deterministic local commands at lifecycle points:
+
+```js
+export const hooks = {
+  beforeRun: [{ command: "npm test", label: "preflight" }],
+  beforeAgent: [{ command: "node scripts/inject-context.mjs", inject: "prompt" }],
+  afterAgent: [{ command: "npm run lint", onFailure: "warn" }],
+  afterRun: [{ command: "node scripts/notify.mjs", onFailure: "warn" }],
+};
+```
+
+Hooks receive a JSON payload on stdin with the run id, cwd, event, state path, bus path, and agent/result when relevant. Non-zero exits block by default; `onFailure: "warn"` records a warning step and continues. A `beforeAgent` hook can print JSON like `{ "context": "extra instructions" }` when `inject: "prompt"` is set.
+
+Workflows can also share run-local tasks, messages, and context across one-shot agents:
+
+```js
+export default async ({ agent, task, message, context }) => {
+  await task("Check auth middleware");
+  await message("routes", "Focus on admin-only endpoints");
+  await context("The app uses src/lib/auth.ts for policy checks");
+
+  return agent("Audit route handlers", { label: "routes" });
+};
+```
+
+Each spawned agent receives a short `Workflow shared context` block with open tasks, messages addressed to its label/id, and latest context items.
+
 The default worktree policy is `auto`:
 
 - read agents never use worktrees
@@ -161,6 +188,7 @@ Workflow state is stored under:
 ```
 
 The dashboard and CLI both read `state.json` as the source of truth.
+The shared workflow bus is stored next to it as `bus.json`.
 
 Generated workflow source files should be kept under:
 

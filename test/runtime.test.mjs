@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { readBus } from "../scripts/lib/bus.mjs";
 import { createRun, rerunAgent, requestPause, resumeRun, stopAgent } from "../scripts/lib/runtime.mjs";
 import { readState, writeState } from "../scripts/lib/state.mjs";
 
@@ -268,6 +269,162 @@ export default async ({ applyEdits }) => applyEdits();
     assert.equal(state.status, "done");
     assert.equal(state.result.status, "failed");
     assert.equal(state.result.failed.length, 1);
+  } finally {
+    process.env.PATH = oldPath;
+    restoreEnv("CODEX_WORKFLOW_HOME", oldHome);
+    await rm(env.root, { recursive: true, force: true });
+  }
+});
+
+test("beforeRun hook failure blocks the workflow before agents spawn", async () => {
+  const env = await setupFakeRepo();
+  const oldPath = process.env.PATH;
+  const oldHome = process.env.CODEX_WORKFLOW_HOME;
+  process.env.PATH = `${env.bin}:${oldPath}`;
+  process.env.CODEX_WORKFLOW_HOME = path.join(env.root, "workflow-home");
+  try {
+    const workflow = path.join(env.repo, "workflow.js");
+    await writeFile(workflow, `
+export const hooks = {
+  beforeRun: [{ command: "node -e \\"process.exit(2)\\"", label: "preflight" }],
+};
+export default async ({ agent }) => agent("should not run");
+`);
+    await assert.rejects(() => createRun(workflow, { cwd: env.repo, runId: "hook-block-run" }), /hook beforeRun blocked/);
+    const state = await readState(env.repo, "hook-block-run");
+    assert.equal(state.status, "failed");
+    assert.equal(state.agents.length, 0);
+    assert.equal(state.steps[0].type, "hook");
+    assert.equal(state.steps[0].status, "failed");
+  } finally {
+    process.env.PATH = oldPath;
+    restoreEnv("CODEX_WORKFLOW_HOME", oldHome);
+    await rm(env.root, { recursive: true, force: true });
+  }
+});
+
+test("beforeAgent hook and shared bus context are injected into prompt", async () => {
+  const env = await setupFakeRepo();
+  const oldPath = process.env.PATH;
+  const oldHome = process.env.CODEX_WORKFLOW_HOME;
+  process.env.PATH = `${env.bin}:${oldPath}`;
+  process.env.CODEX_WORKFLOW_HOME = path.join(env.root, "workflow-home");
+  try {
+    const workflow = path.join(env.repo, "workflow.js");
+    await writeFile(workflow, `
+export const hooks = {
+  beforeAgent: [{
+    command: "node -e \\"console.log(JSON.stringify({ context: 'hook supplied context' }))\\"",
+    label: "inject",
+    inject: "prompt",
+  }],
+};
+export default async ({ agent, task, message, context }) => {
+  await task("shared task");
+  await message("reader", "message for reader");
+  await context("shared repo fact");
+  return agent("base prompt", { label: "reader", mode: "read" });
+};
+`);
+    const state = await createRun(workflow, { cwd: env.repo, runId: "hook-inject-run" });
+    assert.equal(state.status, "done");
+    const prompt = state.result.result;
+    assert.equal(prompt.includes("Workflow shared context:"), true);
+    assert.equal(prompt.includes("shared task"), true);
+    assert.equal(prompt.includes("message for reader"), true);
+    assert.equal(prompt.includes("shared repo fact"), true);
+    assert.equal(prompt.includes("Workflow hook context:"), true);
+    assert.equal(prompt.includes("hook supplied context"), true);
+    const bus = await readBus(env.repo, "hook-inject-run");
+    assert.equal(bus.tasks.length, 1);
+    assert.equal(bus.messages.length, 1);
+    assert.equal(bus.context.length, 1);
+  } finally {
+    process.env.PATH = oldPath;
+    restoreEnv("CODEX_WORKFLOW_HOME", oldHome);
+    await rm(env.root, { recursive: true, force: true });
+  }
+});
+
+test("afterAgent warn hook records warning without failing the run", async () => {
+  const env = await setupFakeRepo();
+  const oldPath = process.env.PATH;
+  const oldHome = process.env.CODEX_WORKFLOW_HOME;
+  process.env.PATH = `${env.bin}:${oldPath}`;
+  process.env.CODEX_WORKFLOW_HOME = path.join(env.root, "workflow-home");
+  try {
+    const workflow = path.join(env.repo, "workflow.js");
+    await writeFile(workflow, `
+export const hooks = {
+  afterAgent: [{ command: "node -e \\"process.exit(3)\\"", label: "lint", onFailure: "warn" }],
+};
+export default async ({ agent }) => agent("prompt", { label: "reader", mode: "read" });
+`);
+    const state = await createRun(workflow, { cwd: env.repo, runId: "hook-warn-run" });
+    assert.equal(state.status, "done");
+    assert.equal(state.agents[0].status, "done");
+    const hook = state.steps.find(step => step.type === "hook");
+    assert.equal(hook.status, "warning");
+    assert.equal(hook.exit_code, 3);
+  } finally {
+    process.env.PATH = oldPath;
+    restoreEnv("CODEX_WORKFLOW_HOME", oldHome);
+    await rm(env.root, { recursive: true, force: true });
+  }
+});
+
+test("hook timeout follows warning policy", async () => {
+  const env = await setupFakeRepo();
+  const oldPath = process.env.PATH;
+  const oldHome = process.env.CODEX_WORKFLOW_HOME;
+  process.env.PATH = `${env.bin}:${oldPath}`;
+  process.env.CODEX_WORKFLOW_HOME = path.join(env.root, "workflow-home");
+  try {
+    const workflow = path.join(env.repo, "workflow.js");
+    await writeFile(workflow, `
+export const hooks = {
+  afterRun: [{
+    command: "node -e \\"setTimeout(() => {}, 1000)\\"",
+    label: "notify",
+    timeout: 0.01,
+    onFailure: "warn",
+  }],
+};
+export default async () => "ok";
+`);
+    const state = await createRun(workflow, { cwd: env.repo, runId: "hook-timeout-run" });
+    assert.equal(state.status, "done");
+    const hook = state.steps.find(step => step.type === "hook");
+    assert.equal(hook.status, "warning");
+    assert.equal(hook.timed_out, true);
+  } finally {
+    process.env.PATH = oldPath;
+    restoreEnv("CODEX_WORKFLOW_HOME", oldHome);
+    await rm(env.root, { recursive: true, force: true });
+  }
+});
+
+test("taskDone updates shared task state", async () => {
+  const env = await setupFakeRepo();
+  const oldPath = process.env.PATH;
+  const oldHome = process.env.CODEX_WORKFLOW_HOME;
+  process.env.PATH = `${env.bin}:${oldPath}`;
+  process.env.CODEX_WORKFLOW_HOME = path.join(env.root, "workflow-home");
+  try {
+    const workflow = path.join(env.repo, "workflow.js");
+    await writeFile(workflow, `
+export default async ({ task, taskDone, readBus }) => {
+  const id = await task("finish me");
+  await taskDone(id, "complete");
+  return readBus();
+};
+`);
+    const state = await createRun(workflow, { cwd: env.repo, runId: "bus-done-run" });
+    assert.equal(state.status, "done");
+    assert.equal(state.result.tasks[0].status, "done");
+    assert.equal(state.result.tasks[0].result, "complete");
+    const bus = await readBus(env.repo, "bus-done-run");
+    assert.equal(bus.tasks[0].status, "done");
   } finally {
     process.env.PATH = oldPath;
     restoreEnv("CODEX_WORKFLOW_HOME", oldHome);
