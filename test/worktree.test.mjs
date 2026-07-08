@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { hasOverlappingFiles, shouldUseWorktree, worktreeInfo } from "../scripts/lib/worktree.mjs";
+import { spawn } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { applyPatch, diffWorktree, hasOverlappingFiles, shouldUseWorktree, worktreeInfo } from "../scripts/lib/worktree.mjs";
 
 test("detects overlapping and missing edit files", () => {
   assert.equal(hasOverlappingFiles([
@@ -37,3 +41,42 @@ test("worktree naming is stable", () => {
     else process.env.CODEX_WORKFLOW_HOME = oldHome;
   }
 });
+
+test("diffWorktree and applyPatch move a worktree change to cwd", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "codex-workflow-diff-"));
+  const repo = path.join(root, "repo");
+  const worktree = path.join(root, "worktree");
+  try {
+    await run("git", ["init", repo]);
+    await run("git", ["config", "user.email", "test@example.com"], repo);
+    await run("git", ["config", "user.name", "Test"], repo);
+    await writeFile(path.join(repo, "a.txt"), "before\n");
+    await run("git", ["add", "a.txt"], repo);
+    await run("git", ["commit", "-m", "init"], repo);
+    await run("git", ["worktree", "add", worktree, "HEAD"], repo);
+    await writeFile(path.join(worktree, "a.txt"), "after\n");
+    const diff = await diffWorktree(worktree);
+    assert.equal(diff.code, 0);
+    assert.equal(diff.stdout.includes("after"), true);
+    const applied = await applyPatch(repo, diff.stdout);
+    assert.equal(applied.code, 0);
+    assert.equal(await readFile(path.join(repo, "a.txt"), "utf8"), "after\n");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+function run(cmd, args, cwd, capture = false) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", chunk => (stdout += chunk));
+    child.stderr.on("data", chunk => (stderr += chunk));
+    child.on("error", reject);
+    child.on("exit", code => {
+      if (code === 0 || capture) resolve({ code: code ?? 1, stdout, stderr });
+      else reject(new Error(stderr || stdout || `${cmd} failed`));
+    });
+  });
+}

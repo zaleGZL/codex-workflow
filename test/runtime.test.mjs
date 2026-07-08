@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createRun, rerunAgent, requestPause, resumeRun, stopAgent } from "../scripts/lib/runtime.mjs";
-import { readState } from "../scripts/lib/state.mjs";
+import { readState, writeState } from "../scripts/lib/state.mjs";
 
 test("runs a pipeline with fake codex and preserves ordered results", async () => {
   const env = await setupFakeRepo();
@@ -175,6 +175,106 @@ export default async ({ agent }) => agent("prompt once", { label: "one", mode: "
   }
 });
 
+test("applyEdits applies done edit worktree diffs", async () => {
+  const env = await setupFakeRepo();
+  const oldPath = process.env.PATH;
+  const oldHome = process.env.CODEX_WORKFLOW_HOME;
+  process.env.PATH = `${env.bin}:${oldPath}`;
+  process.env.CODEX_WORKFLOW_HOME = path.join(env.root, "workflow-home");
+  try {
+    await writeFile(path.join(env.repo, "README.md"), "before\n");
+    await run("git", ["add", "README.md"], env.repo);
+    await run("git", ["commit", "-m", "content"], env.repo);
+    const workflow = path.join(env.repo, "workflow.js");
+    await writeFile(workflow, `
+export const meta = { name: "apply-demo" };
+export default async ({ agent, applyEdits }) => {
+  await agent("write file README.md after", { label: "edit readme", mode: "edit", files: ["README.md"], worktree: "always" });
+  return applyEdits({ label: "apply edits" });
+};
+`);
+    const state = await createRun(workflow, { cwd: env.repo });
+    assert.equal(state.status, "done");
+    assert.equal(state.result.status, "done");
+    assert.equal(state.result.applied.length, 1);
+    assert.equal(await readFile(path.join(env.repo, "README.md"), "utf8"), "after\n");
+    assert.equal(state.steps.at(-1).type, "apply-edits");
+    assert.equal(state.steps.at(-1).agents[0].status, "applied");
+  } finally {
+    process.env.PATH = oldPath;
+    restoreEnv("CODEX_WORKFLOW_HOME", oldHome);
+    await rm(env.root, { recursive: true, force: true });
+  }
+});
+
+test("applyEdits skips non-worktree and empty edit agents", async () => {
+  const env = await setupFakeRepo();
+  const oldPath = process.env.PATH;
+  const oldHome = process.env.CODEX_WORKFLOW_HOME;
+  process.env.PATH = `${env.bin}:${oldPath}`;
+  process.env.CODEX_WORKFLOW_HOME = path.join(env.root, "workflow-home");
+  try {
+    const workflow = path.join(env.repo, "workflow.js");
+    await writeFile(workflow, `
+export const meta = { name: "apply-skip-demo" };
+export default async ({ agent, applyEdits }) => {
+  await agent("no changes", { label: "direct", mode: "edit", files: ["README.md"], worktree: "never" });
+  await agent("no changes", { label: "empty", mode: "edit", files: ["README.md"], worktree: "always" });
+  return applyEdits();
+};
+`);
+    const state = await createRun(workflow, { cwd: env.repo });
+    assert.equal(state.result.status, "done");
+    assert.equal(state.result.applied.length, 0);
+    assert.equal(state.result.skipped.length, 2);
+    assert.equal(state.result.skipped.some(item => item.reason === "agent edited workflow cwd directly"), true);
+    assert.equal(state.result.skipped.some(item => item.reason === "no diff"), true);
+  } finally {
+    process.env.PATH = oldPath;
+    restoreEnv("CODEX_WORKFLOW_HOME", oldHome);
+    await rm(env.root, { recursive: true, force: true });
+  }
+});
+
+test("applyEdits reports failed patches without throwing", async () => {
+  const env = await setupFakeRepo();
+  const oldPath = process.env.PATH;
+  const oldHome = process.env.CODEX_WORKFLOW_HOME;
+  process.env.PATH = `${env.bin}:${oldPath}`;
+  process.env.CODEX_WORKFLOW_HOME = path.join(env.root, "workflow-home");
+  try {
+    const workflow = path.join(env.repo, "workflow.js");
+    await writeFile(workflow, `
+export const meta = { name: "apply-fail-demo" };
+export default async ({ applyEdits }) => applyEdits();
+`);
+    await writeState(env.repo, {
+      run_id: "apply-fail-run",
+      name: "apply-fail-demo",
+      cwd: env.repo,
+      workflow_path: workflow,
+      status: "paused",
+      agents: [{
+        id: "agent-001",
+        label: "bad worktree",
+        mode: "edit",
+        status: "done",
+        worktree: path.join(env.root, "missing-worktree"),
+      }],
+      steps: [],
+      pause_requested: false,
+    });
+    const state = await resumeRun(env.repo, "apply-fail-run");
+    assert.equal(state.status, "done");
+    assert.equal(state.result.status, "failed");
+    assert.equal(state.result.failed.length, 1);
+  } finally {
+    process.env.PATH = oldPath;
+    restoreEnv("CODEX_WORKFLOW_HOME", oldHome);
+    await rm(env.root, { recursive: true, force: true });
+  }
+});
+
 function restoreEnv(key, value) {
   if (value === undefined) delete process.env[key];
   else process.env[key] = value;
@@ -196,6 +296,8 @@ async function setupFakeRepo() {
   await writeFile(fake, `#!/usr/bin/env node
 const fs = require('fs');
 if (process.argv.includes('--version')) process.exit(0);
+const cdIndex = process.argv.indexOf('--cd');
+if (cdIndex !== -1) process.chdir(process.argv[cdIndex + 1]);
 if (process.argv[2] === 'review') {
   let input = '';
   process.stdin.on('data', c => input += c);
@@ -209,6 +311,11 @@ if (process.argv[2] === 'review') {
   process.stdin.on('data', c => input += c);
   process.stdin.on('end', () => {
     if (input.includes('__wait__')) setInterval(() => {}, 1000);
+    else if (input.includes('write file README.md after')) {
+      fs.writeFileSync('README.md', 'after\\n');
+      fs.writeFileSync(out, 'result: wrote README');
+      console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, cached_input_tokens: 4, output_tokens: 5, reasoning_output_tokens: 2 } }));
+    }
     else setTimeout(() => {
       fs.writeFileSync(out, 'result: ' + input);
       console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, cached_input_tokens: 4, output_tokens: 5, reasoning_output_tokens: 2 } }));

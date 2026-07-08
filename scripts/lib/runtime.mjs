@@ -3,7 +3,7 @@ import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { buildReviewCommand, ensureCodexInstalled, runCodexAgent, runCommand } from "./codex.mjs";
 import { readState, runDir, statePath, writeJsonAtomic, writeState } from "./state.mjs";
-import { createWorktree, isGitRepo, shouldUseWorktree } from "./worktree.mjs";
+import { applyPatch, createWorktree, diffWorktree, isGitRepo, shouldUseWorktree } from "./worktree.mjs";
 
 export function makeRunId(name = "workflow") {
   const stamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
@@ -126,6 +126,7 @@ async function runWorkflow(cwd, runId, opts) {
   globalThis.pipeline = runtime.pipeline.bind(runtime);
   globalThis.verify = runtime.verify.bind(runtime);
   globalThis.review = runtime.review.bind(runtime);
+  globalThis.applyEdits = runtime.applyEdits.bind(runtime);
   try {
     const workflow = await import(`${pathToFileURL(state.workflow_path).href}?run=${Date.now()}`);
     const withMeta = await readState(cwd, runId);
@@ -139,6 +140,7 @@ async function runWorkflow(cwd, runId, opts) {
         pipeline: globalThis.pipeline,
         verify: globalThis.verify,
         review: globalThis.review,
+        applyEdits: globalThis.applyEdits,
       });
     }
     const latest = await readState(cwd, runId);
@@ -162,6 +164,7 @@ async function runWorkflow(cwd, runId, opts) {
     delete globalThis.pipeline;
     delete globalThis.verify;
     delete globalThis.review;
+    delete globalThis.applyEdits;
   }
 }
 
@@ -270,6 +273,51 @@ class Runtime {
       result: result.stdout,
       stderr: result.stderr,
     };
+  }
+
+  async applyEdits(options = {}) {
+    const label = options.label ?? "apply edits";
+    const state = await readState(this.cwd, this.runId);
+    const step = this.newStep("apply-edits", label, { cwd: this.cwd, agents: [] });
+    await this.upsertStep({ ...step, status: "running", started_at: new Date().toISOString() });
+
+    const results = [];
+    for (const agent of state.agents.filter(a => a.mode === "edit")) {
+      const base = pickAgent(agent);
+      if (agent.status !== "done") {
+        results.push({ ...base, status: "skipped", reason: `agent status is ${agent.status}` });
+        continue;
+      }
+      if (!isWorktreePath(agent.worktree)) {
+        results.push({ ...base, status: "skipped", reason: "agent edited workflow cwd directly" });
+        continue;
+      }
+      const diff = await diffWorktree(agent.worktree);
+      if (diff.code !== 0) {
+        results.push({ ...base, status: "failed", stdout: diff.stdout, stderr: diff.stderr });
+        continue;
+      }
+      if (!diff.stdout.trim()) {
+        results.push({ ...base, status: "skipped", reason: "no diff" });
+        continue;
+      }
+      const applied = await applyPatch(this.cwd, diff.stdout);
+      results.push({
+        ...base,
+        status: applied.code === 0 ? "applied" : "failed",
+        stdout: applied.stdout,
+        stderr: applied.stderr,
+      });
+    }
+
+    const summary = summarizeApply(label, results);
+    await this.upsertStep({
+      ...step,
+      status: summary.status,
+      agents: results,
+      ended_at: new Date().toISOString(),
+    });
+    return summary;
   }
 
   nextAgentId() {
@@ -416,6 +464,32 @@ class Runtime {
     });
     return this.stateQueue;
   }
+}
+
+function isWorktreePath(value) {
+  return typeof value === "string" && !["", "auto", "always", "never"].includes(value);
+}
+
+function pickAgent(agent) {
+  return {
+    id: agent.id,
+    label: agent.label,
+    worktree: agent.worktree,
+    branch: agent.branch,
+  };
+}
+
+function summarizeApply(label, results) {
+  const applied = results.filter(r => r.status === "applied");
+  const skipped = results.filter(r => r.status === "skipped");
+  const failed = results.filter(r => r.status === "failed");
+  return {
+    status: failed.length ? "failed" : "done",
+    label,
+    applied,
+    skipped,
+    failed,
+  };
 }
 
 async function markAgentStopped(cwd, runId, agentId) {

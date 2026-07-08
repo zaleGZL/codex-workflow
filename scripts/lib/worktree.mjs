@@ -51,14 +51,23 @@ export async function createWorktree(cwd, runId, agentId) {
   return info;
 }
 
-function runGit(cwd, args) {
+export async function diffWorktree(worktree) {
+  return runGit(worktree, ["diff", "--binary", "HEAD"]);
+}
+
+export async function applyPatch(cwd, patch) {
+  return runGit(cwd, ["apply", "--3way"], patch);
+}
+
+function runGit(cwd, args, input = "") {
   return new Promise(resolve => {
-    const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn("git", args, { cwd, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", chunk => (stdout += chunk));
     child.stderr.on("data", chunk => (stderr += chunk));
     child.on("error", error => resolve({ code: 1, stdout, stderr: error.message }));
     child.on("exit", code => resolve({ code: code ?? 1, stdout, stderr }));
+    child.stdin.end(input);
   });
 }

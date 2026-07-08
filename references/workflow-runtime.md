@@ -74,6 +74,14 @@ Options:
 
 It returns `{ status, label, cwd, exit_code, result, stderr }`.
 
+`applyEdits(options)` applies completed edit-agent worktree diffs to the workflow cwd.
+
+Options:
+
+- `label`: display name in state.
+
+It handles done edit agents that used a worktree. It runs `git diff --binary HEAD` in each worktree, then applies each patch to the workflow cwd with `git apply --3way`. It returns `{ status, label, applied, skipped, failed }`. Non-worktree edit agents are skipped because they already edited the workflow cwd directly.
+
 ## Worktree Strategy
 
 Explicit `worktree` wins. Otherwise `auto` is used:
@@ -126,7 +134,8 @@ Routes:
 - `POST /resume`: continue.
 
 `state.json` also includes `steps`, which records non-agent helper calls such as `verify` and `review`.
+`applyEdits` records an `apply-edits` step with per-agent apply results.
 
 ## Limits
 
-V1 does not auto-merge edit branches, rerun individual agents while the run is still running, or guarantee conflict-free edits when `worktree: "never"` is forced.
+V1 does not use `codex apply`, automatically roll back partially applied edit patches, rerun individual agents while the run is still running, or guarantee conflict-free edits when `worktree: "never"` is forced.

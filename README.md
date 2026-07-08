@@ -125,19 +125,22 @@ agent("Update src/a.ts", {
 });
 ```
 
-Edit workflows can close with checks and review:
+Edit workflows can close with applying changes, checks, and review:
 
 ```js
-export default async ({ agent, verify, review }) => {
+export default async ({ agent, applyEdits, verify, review }) => {
   await agent("Update src/a.ts", {
     label: "src/a.ts",
     mode: "edit",
     files: ["src/a.ts"],
   });
 
+  const applied = await applyEdits({ label: "apply edits" });
+  if (applied.status === "failed") return { applied };
+
   const tests = await verify("npm test", { label: "tests" });
   const findings = await review("Review the uncommitted workflow changes.", { label: "review" });
-  return { tests, findings };
+  return { applied, tests, findings };
 };
 ```
 
