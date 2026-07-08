@@ -63,6 +63,64 @@ export default async ({ agent, pipeline }) => pipeline(["a", "b"], item =>
   }
 });
 
+test("verify records successful and failed steps", async () => {
+  const env = await setupFakeRepo();
+  const oldPath = process.env.PATH;
+  const oldHome = process.env.CODEX_WORKFLOW_HOME;
+  process.env.PATH = `${env.bin}:${oldPath}`;
+  process.env.CODEX_WORKFLOW_HOME = path.join(env.root, "workflow-home");
+  try {
+    const workflow = path.join(env.repo, "workflow.js");
+    await writeFile(workflow, `
+export const meta = { name: "verify-demo" };
+export default async ({ verify }) => {
+  const ok = await verify("node --version", { label: "node version" });
+  const failed = await verify("node -e \\"process.exit(2)\\"", { label: "expected failure" });
+  return { ok, failed };
+};
+`);
+    const state = await createRun(workflow, { cwd: env.repo });
+    assert.equal(state.status, "done");
+    assert.equal(state.result.ok.status, "done");
+    assert.equal(state.result.failed.status, "failed");
+    assert.equal(state.result.failed.exit_code, 2);
+    assert.equal(state.steps.length, 2);
+    assert.equal(state.steps[0].type, "verify");
+    assert.equal(state.steps[0].status, "done");
+    assert.equal(state.steps[1].status, "failed");
+  } finally {
+    process.env.PATH = oldPath;
+    restoreEnv("CODEX_WORKFLOW_HOME", oldHome);
+    await rm(env.root, { recursive: true, force: true });
+  }
+});
+
+test("review runs codex review and records a step", async () => {
+  const env = await setupFakeRepo();
+  const oldPath = process.env.PATH;
+  const oldHome = process.env.CODEX_WORKFLOW_HOME;
+  process.env.PATH = `${env.bin}:${oldPath}`;
+  process.env.CODEX_WORKFLOW_HOME = path.join(env.root, "workflow-home");
+  try {
+    const workflow = path.join(env.repo, "workflow.js");
+    await writeFile(workflow, `
+export const meta = { name: "review-demo" };
+export default async ({ review }) => review("focus on correctness", { label: "review changes", base: "main" });
+`);
+    const state = await createRun(workflow, { cwd: env.repo });
+    assert.equal(state.status, "done");
+    assert.equal(state.result.status, "done");
+    assert.equal(state.result.result.includes("reviewed:focus on correctness"), true);
+    assert.equal(state.steps.length, 1);
+    assert.equal(state.steps[0].type, "review");
+    assert.equal(state.steps[0].status, "done");
+  } finally {
+    process.env.PATH = oldPath;
+    restoreEnv("CODEX_WORKFLOW_HOME", oldHome);
+    await rm(env.root, { recursive: true, force: true });
+  }
+});
+
 function restoreEnv(key, value) {
   if (value === undefined) delete process.env[key];
   else process.env[key] = value;
@@ -84,14 +142,23 @@ async function setupFakeRepo() {
   await writeFile(fake, `#!/usr/bin/env node
 const fs = require('fs');
 if (process.argv.includes('--version')) process.exit(0);
-const out = process.argv[process.argv.indexOf('--output-last-message') + 1];
-let input = '';
-process.stdin.on('data', c => input += c);
-process.stdin.on('end', () => setTimeout(() => {
-  fs.writeFileSync(out, 'result: ' + input);
-  console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, cached_input_tokens: 4, output_tokens: 5, reasoning_output_tokens: 2 } }));
-  console.log(JSON.stringify({ type: 'result', input }));
-}, 50));
+if (process.argv[2] === 'review') {
+  let input = '';
+  process.stdin.on('data', c => input += c);
+  process.stdin.on('end', () => {
+    console.log('reviewed:' + input);
+    process.exit(0);
+  });
+} else {
+  const out = process.argv[process.argv.indexOf('--output-last-message') + 1];
+  let input = '';
+  process.stdin.on('data', c => input += c);
+  process.stdin.on('end', () => setTimeout(() => {
+    fs.writeFileSync(out, 'result: ' + input);
+    console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, cached_input_tokens: 4, output_tokens: 5, reasoning_output_tokens: 2 } }));
+    console.log(JSON.stringify({ type: 'result', input }));
+  }, 50));
+}
 `);
   await chmod(fake, 0o755);
   return { root, repo, bin };

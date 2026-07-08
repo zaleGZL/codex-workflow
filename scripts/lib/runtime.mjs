@@ -1,7 +1,7 @@
 import { pathToFileURL } from "node:url";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { ensureCodexInstalled, runCodexAgent } from "./codex.mjs";
+import { buildReviewCommand, ensureCodexInstalled, runCodexAgent, runCommand } from "./codex.mjs";
 import { readState, runDir, statePath, writeJsonAtomic, writeState } from "./state.mjs";
 import { createWorktree, isGitRepo, shouldUseWorktree } from "./worktree.mjs";
 
@@ -33,6 +33,7 @@ export async function createRun(workflowFile, opts = {}) {
     ended_at: null,
     phases: [],
     agents: [],
+    steps: [],
     result: null,
     counts: {},
   };
@@ -75,6 +76,8 @@ async function runWorkflow(cwd, runId, opts) {
   const runtime = new Runtime(cwd, runId, opts);
   globalThis.agent = runtime.agent.bind(runtime);
   globalThis.pipeline = runtime.pipeline.bind(runtime);
+  globalThis.verify = runtime.verify.bind(runtime);
+  globalThis.review = runtime.review.bind(runtime);
   try {
     const workflow = await import(`${pathToFileURL(state.workflow_path).href}?run=${Date.now()}`);
     const withMeta = await readState(cwd, runId);
@@ -83,7 +86,12 @@ async function runWorkflow(cwd, runId, opts) {
     await writeState(cwd, withMeta);
     let result = null;
     if (typeof workflow.default === "function") {
-      result = await workflow.default({ agent: globalThis.agent, pipeline: globalThis.pipeline });
+      result = await workflow.default({
+        agent: globalThis.agent,
+        pipeline: globalThis.pipeline,
+        verify: globalThis.verify,
+        review: globalThis.review,
+      });
     }
     const latest = await readState(cwd, runId);
     latest.result = result;
@@ -104,6 +112,8 @@ async function runWorkflow(cwd, runId, opts) {
   } finally {
     delete globalThis.agent;
     delete globalThis.pipeline;
+    delete globalThis.verify;
+    delete globalThis.review;
   }
 }
 
@@ -120,6 +130,7 @@ class Runtime {
     this.globalWorktree = opts.worktree ?? "auto";
     this.agentSeq = 0;
     this.pipelineSeq = 0;
+    this.stepSeq = 0;
     this.captureId = null;
     this.capturedCall = null;
     this.stateQueue = Promise.resolve();
@@ -163,8 +174,68 @@ class Runtime {
     return results;
   }
 
+  async verify(command, options = {}) {
+    const cwd = path.resolve(options.cwd ?? this.cwd);
+    const step = this.newStep("verify", options.label ?? command, { command, cwd });
+    await this.upsertStep({ ...step, status: "running", started_at: new Date().toISOString() });
+    const result = await runCommand(command, { cwd });
+    const status = result.exitCode === 0 ? "done" : "failed";
+    await this.upsertStep({
+      ...step,
+      status,
+      exit_code: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      ended_at: new Date().toISOString(),
+    });
+    return {
+      status,
+      label: step.label,
+      command,
+      cwd,
+      exit_code: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    };
+  }
+
+  async review(prompt = "", options = {}) {
+    const cwd = path.resolve(options.cwd ?? this.cwd);
+    const command = buildReviewCommand({ ...options, prompt });
+    const step = this.newStep("review", options.label ?? "codex review", { command, cwd });
+    await this.upsertStep({ ...step, status: "running", started_at: new Date().toISOString() });
+    const result = await runCommand(command, { cwd, input: prompt });
+    const status = result.exitCode === 0 ? "done" : "failed";
+    await this.upsertStep({
+      ...step,
+      status,
+      exit_code: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      ended_at: new Date().toISOString(),
+    });
+    return {
+      status,
+      label: step.label,
+      cwd,
+      exit_code: result.exitCode,
+      result: result.stdout,
+      stderr: result.stderr,
+    };
+  }
+
   nextAgentId() {
     return `agent-${String(++this.agentSeq).padStart(3, "0")}`;
+  }
+
+  newStep(type, label, extra) {
+    return {
+      id: `step-${String(++this.stepSeq).padStart(3, "0")}`,
+      type,
+      label,
+      status: "pending",
+      ...extra,
+    };
   }
 
   async isPauseRequested() {
@@ -266,6 +337,15 @@ class Runtime {
     await this.mutateState(state => {
       const agent = state.agents.find(a => a.id === id);
       if (agent) agent.usage = usage;
+    });
+  }
+
+  async upsertStep(step) {
+    await this.mutateState(state => {
+      state.steps ??= [];
+      const index = state.steps.findIndex(s => s.id === step.id);
+      if (index === -1) state.steps.push(step);
+      else state.steps[index] = { ...state.steps[index], ...step };
     });
   }
 

@@ -54,6 +54,26 @@ Options:
 
 Pipeline results stay ordered by input item. Failed agents are returned as failures; other items continue.
 
+`verify(command, options)` runs a local shell command after or between agent work.
+
+Options:
+
+- `label`: display name in state.
+- `cwd`: command working directory, default workflow cwd.
+
+It returns `{ status, label, command, cwd, exit_code, stdout, stderr }`. Non-zero exits return `status: "failed"` instead of throwing, so the workflow decides whether to continue.
+
+`review(prompt, options)` runs `codex review --uncommitted`.
+
+Options:
+
+- `label`: display name in state.
+- `cwd`: review working directory, default workflow cwd.
+- `base`: branch passed to `codex review --base`.
+- `commit`: commit passed to `codex review --commit`.
+
+It returns `{ status, label, cwd, exit_code, result, stderr }`.
+
 ## Worktree Strategy
 
 Explicit `worktree` wins. Otherwise `auto` is used:
@@ -98,6 +118,8 @@ Routes:
 - `/agents/<id>/events`: raw Codex JSONL events.
 - `POST /pause`: request pause.
 - `POST /resume`: continue.
+
+`state.json` also includes `steps`, which records non-agent helper calls such as `verify` and `review`.
 
 ## Limits
 

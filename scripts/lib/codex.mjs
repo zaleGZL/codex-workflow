@@ -78,6 +78,35 @@ export async function runCodexAgent(agent, workdir, options = {}) {
   });
 }
 
+export function runCommand(command, options = {}) {
+  return new Promise(resolve => {
+    const child = spawn(command, {
+      cwd: options.cwd,
+      shell: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", chunk => (stdout += chunk));
+    child.stderr.on("data", chunk => (stderr += chunk));
+    child.on("error", error => resolve({ exitCode: 127, stdout, stderr: stderr + error.message }));
+    child.on("exit", code => resolve({ exitCode: code ?? 1, stdout, stderr }));
+    child.stdin.end(options.input ?? "");
+  });
+}
+
+export function buildReviewCommand(options = {}) {
+  const args = ["codex", "review", "--uncommitted"];
+  if (options.base) args.push("--base", shellArg(options.base));
+  if (options.commit) args.push("--commit", shellArg(options.commit));
+  if (options.prompt) args.push("-");
+  return args.join(" ");
+}
+
+function shellArg(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
+
 function extractUsage(line) {
   if (!line.trim()) return null;
   try {

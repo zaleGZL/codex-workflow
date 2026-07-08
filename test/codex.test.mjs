@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildCodexArgs } from "../scripts/lib/codex.mjs";
+import { buildCodexArgs, buildReviewCommand } from "../scripts/lib/codex.mjs";
 
 test("builds read codex exec command", () => {
   const args = buildCodexArgs({
@@ -30,4 +30,12 @@ test("builds edit codex exec command", () => {
   assert.equal(args.includes("danger-full-access"), true);
   assert.equal(args.includes("--model"), true);
   assert.equal(args.includes("--output-schema"), true);
+});
+
+test("builds codex review command", () => {
+  assert.equal(buildReviewCommand(), "codex review --uncommitted");
+  assert.equal(
+    buildReviewCommand({ prompt: "review this", base: "main", commit: "abc123" }),
+    "codex review --uncommitted --base 'main' --commit 'abc123' -",
+  );
 });

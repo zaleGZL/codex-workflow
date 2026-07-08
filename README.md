@@ -118,6 +118,22 @@ agent("Update src/a.ts", {
 });
 ```
 
+Edit workflows can close with checks and review:
+
+```js
+export default async ({ agent, verify, review }) => {
+  await agent("Update src/a.ts", {
+    label: "src/a.ts",
+    mode: "edit",
+    files: ["src/a.ts"],
+  });
+
+  const tests = await verify("npm test", { label: "tests" });
+  const findings = await review("Review the uncommitted workflow changes.", { label: "review" });
+  return { tests, findings };
+};
+```
+
 The default worktree policy is `auto`:
 
 - read agents never use worktrees
