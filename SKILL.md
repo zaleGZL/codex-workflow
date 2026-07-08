@@ -13,18 +13,14 @@ Before running a workflow:
 
 1. Split the task into agent jobs.
 2. For every edit job, declare the files it is expected to modify with `files`.
-3. Write a workflow script using `agent()` and `pipeline()`.
+3. Write a workflow script using `agent()` and `pipeline()` under `~/.codex/codex-workflow/workflows/`, not inside the target repository.
 4. Run it:
 
 ```bash
 node scripts/cli.mjs run <workflow.js> --cwd <repo>
 ```
 
-Open the dashboard:
-
-```bash
-node scripts/cli.mjs serve <run-id>
-```
+`run` starts the dashboard server immediately and opens it in the browser. Use `serve` only when reopening an existing run.
 
 Use `pause`, `resume`, `status`, and `list` from the same CLI for run control.
 

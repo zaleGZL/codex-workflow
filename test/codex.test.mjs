@@ -15,9 +15,7 @@ test("builds read codex exec command", () => {
     "--cd",
     "/repo",
     "--sandbox",
-    "read-only",
-    "--ask-for-approval",
-    "never",
+    "danger-full-access",
     "-",
   ]);
 });
@@ -29,7 +27,7 @@ test("builds edit codex exec command", () => {
     model: "gpt-test",
     schema: "/tmp/schema.json",
   }, "/repo");
-  assert.equal(args.includes("workspace-write"), true);
+  assert.equal(args.includes("danger-full-access"), true);
   assert.equal(args.includes("--model"), true);
   assert.equal(args.includes("--output-schema"), true);
 });

@@ -22,7 +22,7 @@ Use codex-workflow to migrate all internal fetch calls to the HttpClient wrapper
 Use codex-workflow to research the architecture of this repo and summarize the risky areas.
 ```
 
-Codex decides whether a workflow is useful, generates the workflow script, runs the local runtime, and shows the dashboard URL for progress. The CLI commands below are for development and debugging.
+Codex decides whether a workflow is useful, writes the workflow script under `~/.codex/codex-workflow/workflows/`, runs the local runtime, and opens the dashboard in your browser. The CLI commands below are for development and debugging.
 
 ## Requirements
 
@@ -46,7 +46,7 @@ Watch and resync on file changes:
 npm run dev
 ```
 
-The dev sync preserves runtime state. It only replaces managed skill files in `~/.codex/skills/codex-workflow` and keeps `.codex/`, workflow runs, and other runtime files.
+The dev sync preserves runtime state. It only replaces managed skill files in `~/.codex/skills/codex-workflow`. Runtime files live under `~/.codex/codex-workflow/`.
 
 ## CLI For Development And Debugging
 
@@ -55,6 +55,8 @@ Run a workflow:
 ```bash
 node scripts/cli.mjs run examples/research-files.workflow.js --cwd .
 ```
+
+`run` starts the dashboard server immediately and opens it in your browser. It prefers port `8765` and falls back to the next free port when multiple dashboards are running.
 
 Show status:
 
@@ -68,7 +70,7 @@ Open the dashboard:
 node scripts/cli.mjs serve <run-id> --cwd . --port 8765
 ```
 
-`serve` opens the dashboard in your browser automatically. Use `--no-open` for headless or test runs.
+`serve` reopens an existing run dashboard in your browser. Use `--no-open` for headless or test runs.
 By default it prefers port `8765` and automatically falls back to the next free port when multiple dashboards are running. If you pass `--port`, that port is treated as explicit and a conflict fails fast.
 
 Pause and resume:
@@ -129,10 +131,16 @@ For the full DSL reference, read [references/workflow-runtime.md](references/wor
 Workflow state is stored under:
 
 ```text
-.codex/workflow-runs/<run-id>/
+~/.codex/codex-workflow/runs/<run-id>/
 ```
 
 The dashboard and CLI both read `state.json` as the source of truth.
+
+Generated workflow source files should be kept under:
+
+```text
+~/.codex/codex-workflow/workflows/
+```
 
 ## Tests
 

@@ -10,7 +10,9 @@ import { readState } from "../scripts/lib/state.mjs";
 test("runs a pipeline with fake codex and preserves ordered results", async () => {
   const env = await setupFakeRepo();
   const oldPath = process.env.PATH;
+  const oldHome = process.env.CODEX_WORKFLOW_HOME;
   process.env.PATH = `${env.bin}:${oldPath}`;
+  process.env.CODEX_WORKFLOW_HOME = path.join(env.root, "workflow-home");
   try {
     const workflow = path.join(env.repo, "workflow.js");
     await writeFile(workflow, `
@@ -26,6 +28,7 @@ export default async ({ agent, pipeline }) => pipeline(["a", "b"], item =>
     assert.equal(state.result[1].result.includes("prompt b"), true);
   } finally {
     process.env.PATH = oldPath;
+    restoreEnv("CODEX_WORKFLOW_HOME", oldHome);
     await rm(env.root, { recursive: true, force: true });
   }
 });
@@ -33,7 +36,9 @@ export default async ({ agent, pipeline }) => pipeline(["a", "b"], item =>
 test("pause prevents pending agents and resume completes them", async () => {
   const env = await setupFakeRepo();
   const oldPath = process.env.PATH;
+  const oldHome = process.env.CODEX_WORKFLOW_HOME;
   process.env.PATH = `${env.bin}:${oldPath}`;
+  process.env.CODEX_WORKFLOW_HOME = path.join(env.root, "workflow-home");
   try {
     const workflow = path.join(env.repo, "workflow.js");
     await writeFile(workflow, `
@@ -52,9 +57,15 @@ export default async ({ agent, pipeline }) => pipeline(["a", "b"], item =>
     assert.equal(resumed.status, "done");
   } finally {
     process.env.PATH = oldPath;
+    restoreEnv("CODEX_WORKFLOW_HOME", oldHome);
     await rm(env.root, { recursive: true, force: true });
   }
 });
+
+function restoreEnv(key, value) {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
 
 async function setupFakeRepo() {
   const root = await mkdtemp(path.join(os.tmpdir(), "codex-workflow-runtime-"));

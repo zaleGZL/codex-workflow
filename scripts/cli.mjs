@@ -1,6 +1,8 @@
 #!/usr/bin/env node
+import { spawn } from "node:child_process";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createRun, requestPause, resumeRun } from "./lib/runtime.mjs";
 import { serve } from "./lib/server.mjs";
 import { formatSummary, readState, runsDir } from "./lib/state.mjs";
@@ -19,6 +21,7 @@ async function main() {
     const workflow = args.shift();
     if (!workflow) throw new Error("usage: codex-workflow run <workflow.js> [--cwd <path>]");
     const opts = parseOpts(args);
+    if (opts.serve !== false) opts.onStateReady = state => startDashboard(state, opts);
     const state = await createRun(workflow, opts);
     console.log(formatSummary(state));
     return;
@@ -88,10 +91,19 @@ function help() {
   console.log(`codex-workflow
 
 Commands:
-  run <workflow.js> [--cwd <path>] [--concurrency <n>] [--model <model>] [--worktree auto|always|never]
+  run <workflow.js> [--cwd <path>] [--concurrency <n>] [--model <model>] [--worktree auto|always|never] [--no-serve] [--no-open]
   status <run-id> [--cwd <path>]
   serve <run-id> [--cwd <path>] [--port <port>] [--no-open]
   pause <run-id> [--cwd <path>]
   resume <run-id> [--cwd <path>]
   list [--cwd <path>]`);
+}
+
+function startDashboard(state, opts) {
+  const cli = fileURLToPath(import.meta.url);
+  const args = [cli, "serve", state.run_id, "--cwd", state.cwd];
+  if (opts.port) args.push("--port", String(opts.port));
+  if (opts.open === false) args.push("--no-open");
+  const child = spawn(process.execPath, args, { detached: true, stdio: "ignore" });
+  child.unref();
 }

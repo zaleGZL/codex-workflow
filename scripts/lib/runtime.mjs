@@ -37,6 +37,7 @@ export async function createRun(workflowFile, opts = {}) {
     counts: {},
   };
   await writeState(cwd, state);
+  if (typeof opts.onStateReady === "function") await opts.onStateReady(state);
   return runWorkflow(cwd, runId, opts);
 }
 

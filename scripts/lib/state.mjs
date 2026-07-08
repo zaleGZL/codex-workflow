@@ -1,8 +1,14 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
+export function workflowHome() {
+  return process.env.CODEX_WORKFLOW_HOME
+    ?? path.join(process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex"), "codex-workflow");
+}
+
 export function runsDir(cwd) {
-  return path.join(cwd, ".codex", "workflow-runs");
+  return path.join(workflowHome(), "runs");
 }
 
 export function runDir(cwd, runId) {

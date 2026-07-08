@@ -26,7 +26,14 @@ test("chooses worktree policy", () => {
 });
 
 test("worktree naming is stable", () => {
+  const oldHome = process.env.CODEX_WORKFLOW_HOME;
+  process.env.CODEX_WORKFLOW_HOME = "/tmp/codex-workflow-home";
   const info = worktreeInfo("/repo", "run-1", "agent-001");
-  assert.equal(info.worktree, "/repo/.codex/workflow-worktrees/run-1/agent-001");
-  assert.equal(info.branch, "codex/workflow/run-1/agent-001");
+  try {
+    assert.equal(info.worktree, "/tmp/codex-workflow-home/worktrees/run-1/agent-001");
+    assert.equal(info.branch, "codex/workflow/run-1/agent-001");
+  } finally {
+    if (oldHome === undefined) delete process.env.CODEX_WORKFLOW_HOME;
+    else process.env.CODEX_WORKFLOW_HOME = oldHome;
+  }
 });

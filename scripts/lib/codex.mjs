@@ -12,9 +12,7 @@ export function buildCodexArgs(agent, workdir) {
     "--cd",
     workdir,
     "--sandbox",
-    agent.mode === "edit" ? "workspace-write" : "read-only",
-    "--ask-for-approval",
-    "never",
+    "danger-full-access",
   ];
   if (agent.model) args.push("--model", agent.model);
   if (agent.schema) args.push("--output-schema", agent.schema);

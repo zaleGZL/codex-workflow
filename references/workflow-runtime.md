@@ -23,9 +23,17 @@ export default async ({ agent, pipeline }) => {
 
 Top-level `await agent(...)` also works, but only `export default async` can return an overall result.
 
+Generated workflow files should live outside the target repository:
+
+```text
+~/.codex/codex-workflow/workflows/
+```
+
 ## API
 
 `agent(prompt, options)` runs one `codex exec` worker.
+
+Workers run with `codex exec --json --output-last-message <result.md> --cd <workdir> --sandbox danger-full-access -`.
 
 Options:
 
@@ -64,14 +72,23 @@ If `worktree: "never"` conflicts with overlapping files, the run continues and t
 
 ## Dashboard
 
-Start:
+`run` starts a dashboard server immediately and opens it in the default browser. Reopen an existing run with:
 
 ```bash
 node scripts/cli.mjs serve <run-id>
 ```
 
-`serve` opens the dashboard in the default browser automatically. Pass `--no-open` when running in a headless environment.
+Pass `--no-open` when running in a headless environment.
 It prefers port `8765` and falls back to the next free port unless `--port` was explicitly provided.
+
+## State
+
+Runtime files are stored outside target repositories:
+
+```text
+~/.codex/codex-workflow/runs/<run-id>/
+~/.codex/codex-workflow/worktrees/<run-id>/<agent-id>/
+```
 
 Routes:
 

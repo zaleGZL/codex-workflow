@@ -22,7 +22,7 @@ Use codex-workflow to audit all route handlers for missing auth checks.
 用 codex-workflow 研究这个仓库的架构，并总结高风险区域。
 ```
 
-之后 Codex 会判断是否需要 workflow，生成 workflow 脚本，调用本地 runtime 执行，并给出 dashboard 地址查看进度。下面的 CLI 命令主要是给开发和调试用的实现细节。
+之后 Codex 会判断是否需要 workflow，把 workflow 脚本写到 `~/.codex/codex-workflow/workflows/`，调用本地 runtime 执行，并自动在浏览器中打开 dashboard。下面的 CLI 命令主要是给开发和调试用的实现细节。
 
 ## 环境要求
 
@@ -46,7 +46,7 @@ npm run sync:skill
 npm run dev
 ```
 
-dev 同步不会删除运行状态。它只替换 `~/.codex/skills/codex-workflow` 下受管理的 skill 文件，并保留 `.codex/`、workflow runs 和其他运行时文件。
+dev 同步不会删除运行状态。它只替换 `~/.codex/skills/codex-workflow` 下受管理的 skill 文件。运行时文件统一放在 `~/.codex/codex-workflow/`。
 
 ## 开发和调试用 CLI
 
@@ -55,6 +55,8 @@ dev 同步不会删除运行状态。它只替换 `~/.codex/skills/codex-workflo
 ```bash
 node scripts/cli.mjs run examples/research-files.workflow.js --cwd .
 ```
+
+`run` 会立即启动 dashboard server，并自动在浏览器中打开。默认优先使用 `8765`，如果多个 dashboard 同时运行，会自动尝试下一个可用端口。
 
 查看状态：
 
@@ -68,7 +70,7 @@ node scripts/cli.mjs status <run-id> --cwd .
 node scripts/cli.mjs serve <run-id> --cwd . --port 8765
 ```
 
-`serve` 会自动在浏览器中打开 dashboard。无头环境或测试时可以加 `--no-open`。
+`serve` 用来重新打开已有 run 的 dashboard。无头环境或测试时可以加 `--no-open`。
 默认优先使用 `8765`，如果多个 dashboard 同时运行，会自动尝试下一个可用端口。如果显式传了 `--port`，端口冲突会直接失败。
 
 暂停和继续：
@@ -129,10 +131,16 @@ agent("Update src/a.ts", {
 Workflow 状态保存在：
 
 ```text
-.codex/workflow-runs/<run-id>/
+~/.codex/codex-workflow/runs/<run-id>/
 ```
 
 Dashboard 和 CLI 都以 `state.json` 作为唯一事实源。
+
+生成的 workflow 源文件应该放在：
+
+```text
+~/.codex/codex-workflow/workflows/
+```
 
 ## 测试
 

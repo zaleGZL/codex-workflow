@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { workflowHome } from "./state.mjs";
 
 export function hasOverlappingFiles(jobs) {
   const seen = new Set();
@@ -32,7 +33,7 @@ export function shouldUseWorktree(agent, parallelJobs, globalPolicy = "auto") {
 
 export function worktreeInfo(cwd, runId, agentId) {
   return {
-    worktree: path.join(cwd, ".codex", "workflow-worktrees", runId, agentId),
+    worktree: path.join(workflowHome(), "worktrees", runId, agentId),
     branch: `codex/workflow/${runId}/${agentId}`,
   };
 }

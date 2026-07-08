@@ -7,6 +7,8 @@ import { readState, writeState } from "../scripts/lib/state.mjs";
 
 test("writes state atomically and counts statuses", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "codex-workflow-state-"));
+  const oldHome = process.env.CODEX_WORKFLOW_HOME;
+  process.env.CODEX_WORKFLOW_HOME = path.join(dir, "workflow-home");
   try {
     const state = {
       run_id: "run-1",
@@ -24,6 +26,8 @@ test("writes state atomically and counts statuses", async () => {
     const saved = await readState(dir, "run-1");
     assert.deepEqual(saved.counts, { pending: 0, running: 1, done: 1, failed: 1, stale: 1 });
   } finally {
+    if (oldHome === undefined) delete process.env.CODEX_WORKFLOW_HOME;
+    else process.env.CODEX_WORKFLOW_HOME = oldHome;
     await rm(dir, { recursive: true, force: true });
   }
 });

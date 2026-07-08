@@ -9,6 +9,8 @@ import { writeState } from "../scripts/lib/state.mjs";
 
 test("serves dashboard and state", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "codex-workflow-server-"));
+  const oldHome = process.env.CODEX_WORKFLOW_HOME;
+  process.env.CODEX_WORKFLOW_HOME = path.join(dir, "workflow-home");
   try {
     await writeState(dir, {
       run_id: "run-1",
@@ -27,6 +29,7 @@ test("serves dashboard and state", async () => {
     assert.equal(html.includes("Codex Workflow"), true);
     assert.equal(state.run_id, "run-1");
   } finally {
+    restoreEnv("CODEX_WORKFLOW_HOME", oldHome);
     await rm(dir, { recursive: true, force: true });
   }
 });
@@ -34,6 +37,8 @@ test("serves dashboard and state", async () => {
 test("serve falls back when preferred port is busy", async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), "codex-workflow-server-port-"));
   const blocker = http.createServer((_req, res) => res.end("busy"));
+  const oldHome = process.env.CODEX_WORKFLOW_HOME;
+  process.env.CODEX_WORKFLOW_HOME = path.join(dir, "workflow-home");
   try {
     await writeState(dir, {
       run_id: "run-1",
@@ -51,6 +56,12 @@ test("serve falls back when preferred port is busy", async () => {
     assert.notEqual(port, busyPort);
   } finally {
     blocker.close();
+    restoreEnv("CODEX_WORKFLOW_HOME", oldHome);
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+function restoreEnv(key, value) {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
