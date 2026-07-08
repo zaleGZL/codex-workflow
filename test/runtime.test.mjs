@@ -24,6 +24,7 @@ export default async ({ agent, pipeline }) => pipeline(["a", "b"], item =>
     const state = await createRun(workflow, { cwd: env.repo, concurrency: 2 });
     assert.equal(state.status, "done");
     assert.equal(state.agents.length, 2);
+    assert.equal(state.agents[0].usage.total_tokens, 15);
     assert.equal(state.result[0].result.includes("prompt a"), true);
     assert.equal(state.result[1].result.includes("prompt b"), true);
   } finally {
@@ -88,6 +89,7 @@ let input = '';
 process.stdin.on('data', c => input += c);
 process.stdin.on('end', () => setTimeout(() => {
   fs.writeFileSync(out, 'result: ' + input);
+  console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, cached_input_tokens: 4, output_tokens: 5, reasoning_output_tokens: 2 } }));
   console.log(JSON.stringify({ type: 'result', input }));
 }, 50));
 `);

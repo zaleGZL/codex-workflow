@@ -17,7 +17,7 @@ test("serves dashboard and state", async () => {
       name: "demo",
       cwd: dir,
       status: "running",
-      agents: [],
+      agents: [{ id: "agent-001", label: "a", status: "running", usage: { total_tokens: 15 } }],
       pause_requested: false,
     });
     const server = await serve(dir, "run-1", 0, { open: false, portExplicit: true });
@@ -27,7 +27,42 @@ test("serves dashboard and state", async () => {
     await fetch(`http://127.0.0.1:${port}/pause`, { method: "POST" });
     server.close();
     assert.equal(html.includes("Codex Workflow"), true);
+    assert.equal(html.includes("<th>Tokens</th>"), true);
+    assert.equal(html.includes(">Pause<"), false);
+    assert.equal(html.includes(">Resume<"), false);
+    assert.equal(html.includes("post('/pause')"), false);
+    assert.equal(html.includes("post('/resume')"), false);
     assert.equal(state.run_id, "run-1");
+  } finally {
+    restoreEnv("CODEX_WORKFLOW_HOME", oldHome);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("auto-closes dashboard when run finishes", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "codex-workflow-server-close-"));
+  const oldHome = process.env.CODEX_WORKFLOW_HOME;
+  process.env.CODEX_WORKFLOW_HOME = path.join(dir, "workflow-home");
+  try {
+    await writeState(dir, {
+      run_id: "run-1",
+      name: "demo",
+      cwd: dir,
+      status: "running",
+      agents: [],
+      pause_requested: false,
+    });
+    const server = await serve(dir, "run-1", 0, { open: false, portExplicit: true, exitOnDone: true });
+    await writeState(dir, {
+      run_id: "run-1",
+      name: "demo",
+      cwd: dir,
+      status: "done",
+      agents: [],
+      pause_requested: false,
+    });
+    await new Promise(resolve => server.on("close", resolve));
+    assert.equal(server.listening, false);
   } finally {
     restoreEnv("CODEX_WORKFLOW_HOME", oldHome);
     await rm(dir, { recursive: true, force: true });

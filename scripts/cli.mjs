@@ -56,6 +56,7 @@ async function main() {
     await serve(path.resolve(opts.cwd ?? process.cwd()), runId, opts.port ? Number(opts.port) : undefined, {
       open: opts.open !== false,
       portExplicit: Boolean(opts.port),
+      exitOnDone: opts.exitOnDone === "true",
     });
     return;
   }
@@ -104,6 +105,7 @@ function startDashboard(state, opts) {
   const args = [cli, "serve", state.run_id, "--cwd", state.cwd];
   if (opts.port) args.push("--port", String(opts.port));
   if (opts.open === false) args.push("--no-open");
+  args.push("--exit-on-done", "true");
   const child = spawn(process.execPath, args, { detached: true, stdio: "ignore" });
   child.unref();
 }

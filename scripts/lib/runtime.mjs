@@ -225,12 +225,15 @@ class Runtime {
       }
     }
     await this.upsertAgent(agent);
-    const result = await runCodexAgent(agent, workdir);
+    const result = await runCodexAgent(agent, workdir, {
+      onUsage: usage => this.updateAgentUsage(agent.id, usage),
+    });
     const finalAgent = {
       ...agent,
       status: result.exitCode === 0 ? "done" : "failed",
       exit_code: result.exitCode,
       error: result.error,
+      usage: result.usage ?? agent.usage,
       ended_at: new Date().toISOString(),
     };
     await this.upsertAgent(finalAgent);
@@ -256,6 +259,13 @@ class Runtime {
       const index = state.agents.findIndex(a => a.id === agent.id);
       if (index === -1) state.agents.push(agent);
       else state.agents[index] = { ...state.agents[index], ...agent };
+    });
+  }
+
+  async updateAgentUsage(id, usage) {
+    await this.mutateState(state => {
+      const agent = state.agents.find(a => a.id === id);
+      if (agent) agent.usage = usage;
     });
   }
 

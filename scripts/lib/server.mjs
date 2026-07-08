@@ -34,6 +34,7 @@ export async function serve(cwd, runId, port = undefined, options = {}) {
   const actualPort = server.address().port;
   const url = `http://127.0.0.1:${actualPort}/`;
   console.log(`Codex workflow dashboard: ${url}`);
+  if (options.exitOnDone === true) closeWhenDone(server, cwd, runId);
   if (options.open !== false) openBrowser(url);
   return server;
 }
@@ -60,6 +61,19 @@ function listen(server, port, explicit) {
     };
     tryPort(start);
   });
+}
+
+function closeWhenDone(server, cwd, runId) {
+  const timer = setInterval(async () => {
+    try {
+      const state = await readState(cwd, runId);
+      if (state.status === "done" || state.status === "failed") {
+        clearInterval(timer);
+        server.close();
+      }
+    } catch {}
+  }, 1000);
+  server.on("close", () => clearInterval(timer));
 }
 
 export function openBrowser(url) {
@@ -131,8 +145,6 @@ function page(runId) {
     .eyebrow{color:var(--muted);font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
     h1{font-size:26px;line-height:1.2;margin:4px 0 0}
     .actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
-    .primary{background:var(--accent);border-color:var(--accent);color:white}
-    .primary:hover{background:color-mix(in srgb,var(--accent) 88%,black)}
     .summary-grid{display:grid;grid-template-columns:repeat(6,minmax(120px,1fr));gap:10px;margin:18px 0}
     .metric{background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow);padding:12px}
     .metric span{display:block;color:var(--muted);font-size:12px;font-weight:600}
@@ -163,8 +175,6 @@ function page(runId) {
         <h1 id="title">Loading workflow</h1>
       </div>
       <div class="actions">
-        <button class="primary" onclick="post('/pause')">Pause</button>
-        <button onclick="post('/resume')">Resume</button>
         <button id="theme" onclick="toggleTheme()" aria-label="Toggle dark mode">Dark</button>
       </div>
     </section>
@@ -182,7 +192,7 @@ function page(runId) {
         <span id="updated" class="eyebrow"></span>
       </div>
       <div class="table-wrap">
-        <table><thead><tr><th>ID</th><th>Label</th><th>Mode</th><th>Status</th><th>Files</th><th>Branch</th><th>Warning</th></tr></thead><tbody id="agents"></tbody></table>
+        <table><thead><tr><th>ID</th><th>Label</th><th>Mode</th><th>Status</th><th>Tokens</th><th>Files</th><th>Branch</th><th>Warning</th></tr></thead><tbody id="agents"></tbody></table>
       </div>
     </section>
   </main>
@@ -191,7 +201,6 @@ function page(runId) {
     const storedTheme = localStorage.getItem('codexWorkflowTheme');
     const systemDark = matchMedia('(prefers-color-scheme: dark)').matches;
     setTheme(storedTheme || (systemDark ? 'dark' : 'light'));
-    async function post(path){ await fetch(path,{method:'POST'}); await load(); }
     function setTheme(theme){
       root.dataset.theme = theme;
       localStorage.setItem('codexWorkflowTheme', theme);
@@ -207,8 +216,11 @@ function page(runId) {
       document.getElementById('status').textContent = s.status || 'unknown';
       document.getElementById('updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
       const agents = s.agents || [];
-      document.getElementById('agents').innerHTML = agents.length ? agents.map(a => '<tr><td><a href="/agents/'+a.id+'">'+a.id+'</a></td><td>'+esc(a.label||'')+'</td><td>'+esc(a.mode||'')+'</td><td><span class="status '+esc(a.status||'pending')+'">'+esc(a.status||'pending')+'</span></td><td><code title="'+esc(filesText(a))+'">'+esc(filesText(a))+'</code></td><td><code title="'+esc(a.branch||'')+'">'+esc(a.branch||'-')+'</code></td><td>'+esc(a.warning||'')+'</td></tr>').join('') : '<tr><td colspan="7" class="empty">No agents scheduled yet.</td></tr>';
+      document.getElementById('agents').innerHTML = agents.length ? agents.map(a => '<tr><td><a href="/agents/'+a.id+'">'+a.id+'</a></td><td>'+esc(a.label||'')+'</td><td>'+esc(a.mode||'')+'</td><td><span class="status '+esc(a.status||'pending')+'">'+esc(a.status||'pending')+'</span></td><td><code title="'+esc(tokensTitle(a))+'">'+esc(tokensText(a))+'</code></td><td><code title="'+esc(filesText(a))+'">'+esc(filesText(a))+'</code></td><td><code title="'+esc(a.branch||'')+'">'+esc(a.branch||'-')+'</code></td><td>'+esc(a.warning||'')+'</td></tr>').join('') : '<tr><td colspan="8" class="empty">No agents scheduled yet.</td></tr>';
     }
+    function tokensText(a){ return a.usage ? fmt(a.usage.total_tokens) : '-'; }
+    function tokensTitle(a){ return a.usage ? 'input '+fmt(a.usage.input_tokens)+', cached '+fmt(a.usage.cached_input_tokens)+', output '+fmt(a.usage.output_tokens)+', reasoning '+fmt(a.usage.reasoning_output_tokens) : '-'; }
+    function fmt(n){ return Number(n || 0).toLocaleString(); }
     function filesText(a){ return (a.files || []).length ? a.files.join(', ') : '-'; }
     function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
     load(); setInterval(load, 2000);

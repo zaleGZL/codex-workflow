@@ -33,7 +33,7 @@ export async function ensureCodexInstalled() {
   });
 }
 
-export async function runCodexAgent(agent, workdir) {
+export async function runCodexAgent(agent, workdir, options = {}) {
   await mkdir(path.dirname(agent.prompt_path), { recursive: true });
   await writeFile(agent.prompt_path, agent.prompt);
   await mkdir(path.dirname(agent.events_path), { recursive: true });
@@ -43,7 +43,22 @@ export async function runCodexAgent(agent, workdir) {
       stdio: ["pipe", "pipe", "pipe"],
     });
     const events = createWriteStream(agent.events_path, { flags: "a" });
-    child.stdout.pipe(events);
+    let stdoutBuffer = "";
+    let usage = null;
+    child.stdout.on("data", chunk => {
+      const text = chunk.toString();
+      events.write(text);
+      stdoutBuffer += text;
+      const lines = stdoutBuffer.split("\n");
+      stdoutBuffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const next = extractUsage(line);
+        if (next) {
+          usage = next;
+          options.onUsage?.(next);
+        }
+      }
+    });
     child.stderr.on("data", chunk => events.write(JSON.stringify({ type: "stderr", text: chunk.toString() }) + "\n"));
     child.stdin.end(agent.prompt);
     child.on("error", error => {
@@ -52,8 +67,40 @@ export async function runCodexAgent(agent, workdir) {
       resolve({ exitCode: 127, error: error.message });
     });
     child.on("exit", code => {
+      const next = extractUsage(stdoutBuffer);
+      if (next) {
+        usage = next;
+        options.onUsage?.(next);
+      }
       events.end();
-      resolve({ exitCode: code ?? 1 });
+      resolve({ exitCode: code ?? 1, usage });
     });
   });
+}
+
+function extractUsage(line) {
+  if (!line.trim()) return null;
+  try {
+    const event = JSON.parse(line);
+    return normalizeUsage(event.usage ?? event.item?.usage);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeUsage(usage) {
+  if (!usage || typeof usage !== "object") return null;
+  const normalized = {
+    input_tokens: numberOrZero(usage.input_tokens),
+    cached_input_tokens: numberOrZero(usage.cached_input_tokens),
+    output_tokens: numberOrZero(usage.output_tokens),
+    reasoning_output_tokens: numberOrZero(usage.reasoning_output_tokens),
+  };
+  normalized.total_tokens = numberOrZero(usage.total_tokens)
+    || normalized.input_tokens + normalized.output_tokens;
+  return normalized;
+}
+
+function numberOrZero(value) {
+  return Number.isFinite(value) ? value : 0;
 }
