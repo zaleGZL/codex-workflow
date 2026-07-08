@@ -1,7 +1,7 @@
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { clearPause, requestPause, resumeRun } from "./runtime.mjs";
+import { clearPause, rerunAgent, requestPause, resumeRun, stopAgent } from "./runtime.mjs";
 import { readState } from "./state.mjs";
 
 export async function serve(cwd, runId, port = undefined, options = {}) {
@@ -15,6 +15,12 @@ export async function serve(cwd, runId, port = undefined, options = {}) {
         await clearPause(cwd, runId);
         resumeRun(cwd, runId).catch(() => {});
         return sendJson(res, await readState(cwd, runId));
+      }
+      const controlMatch = url.pathname.match(/^\/agents\/([^/]+)\/(stop|rerun)$/);
+      if (req.method === "POST" && controlMatch) {
+        const agentId = decodeURIComponent(controlMatch[1]);
+        if (controlMatch[2] === "stop") return sendJson(res, await stopAgent(cwd, runId, agentId));
+        return sendJson(res, await rerunAgent(cwd, runId, agentId));
       }
       const agentMatch = url.pathname.match(/^\/agents\/([^/]+)(\/events)?$/);
       if (req.method === "GET" && agentMatch) {
@@ -145,7 +151,7 @@ function page(runId) {
     .eyebrow{color:var(--muted);font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
     h1{font-size:26px;line-height:1.2;margin:4px 0 0}
     .actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
-    .summary-grid{display:grid;grid-template-columns:repeat(6,minmax(120px,1fr));gap:10px;margin:18px 0}
+    .summary-grid{display:grid;grid-template-columns:repeat(7,minmax(110px,1fr));gap:10px;margin:18px 0}
     .metric{background:var(--panel);border:1px solid var(--border);border-radius:8px;box-shadow:var(--shadow);padding:12px}
     .metric span{display:block;color:var(--muted);font-size:12px;font-weight:600}
     .metric strong{display:block;font-size:22px;line-height:1.1;margin-top:6px}
@@ -153,15 +159,15 @@ function page(runId) {
     .panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid var(--border)}
     h2{font-size:15px;margin:0}
     .table-wrap{overflow:auto}
-    table{border-collapse:collapse;width:100%;min-width:920px}
+    table{border-collapse:collapse;width:100%;min-width:1040px}
     th,td{border-bottom:1px solid var(--border);padding:10px 12px;text-align:left;font-size:13px;vertical-align:top}
     th{background:var(--panel-2);color:var(--muted);font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase}
     tr:hover td{background:color-mix(in srgb,var(--panel-2) 72%,transparent)}
     code{display:inline-block;max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:6px;background:var(--code-bg);color:var(--code);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;padding:1px 5px}
     .status{display:inline-flex;align-items:center;gap:6px;border-radius:999px;font-weight:700;padding:4px 8px;text-transform:capitalize}
     .status:before{content:"";width:7px;height:7px;border-radius:999px;background:currentColor}
-    .done{background:#dcfce7;color:#047857}.failed{background:#fee2e2;color:#b91c1c}.running{background:#dbeafe;color:#1d4ed8}.paused{background:#fef3c7;color:#92400e}.stale{background:#ede9fe;color:#7c3aed}.pending{background:#e2e8f0;color:#475569}
-    html[data-theme="dark"] .done{background:#06351f;color:#4ade80}html[data-theme="dark"] .failed{background:#451a1a;color:#f87171}html[data-theme="dark"] .running{background:#132d55;color:#93c5fd}html[data-theme="dark"] .paused{background:#422006;color:#fbbf24}html[data-theme="dark"] .stale{background:#2e1065;color:#c4b5fd}html[data-theme="dark"] .pending{background:#263244;color:#cbd5e1}
+    .done{background:#dcfce7;color:#047857}.failed{background:#fee2e2;color:#b91c1c}.running{background:#dbeafe;color:#1d4ed8}.paused{background:#fef3c7;color:#92400e}.stale{background:#ede9fe;color:#7c3aed}.pending{background:#e2e8f0;color:#475569}.stopped{background:#f1f5f9;color:#334155}
+    html[data-theme="dark"] .done{background:#06351f;color:#4ade80}html[data-theme="dark"] .failed{background:#451a1a;color:#f87171}html[data-theme="dark"] .running{background:#132d55;color:#93c5fd}html[data-theme="dark"] .paused{background:#422006;color:#fbbf24}html[data-theme="dark"] .stale{background:#2e1065;color:#c4b5fd}html[data-theme="dark"] .pending{background:#263244;color:#cbd5e1}html[data-theme="dark"] .stopped{background:#1f2937;color:#cbd5e1}
     .empty{padding:28px 16px;color:var(--muted);text-align:center}
     @media (max-width:900px){.app{padding:16px}.topbar{display:block}.actions{justify-content:flex-start;margin-top:14px}.summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
     @media (prefers-reduced-motion:reduce){button{transition:none}}
@@ -185,6 +191,7 @@ function page(runId) {
       <div class="metric"><span>Running</span><strong id="running">0</strong></div>
       <div class="metric"><span>Pending</span><strong id="pending">0</strong></div>
       <div class="metric"><span>Stale</span><strong id="stale">0</strong></div>
+      <div class="metric"><span>Stopped</span><strong id="stopped">0</strong></div>
     </section>
     <section class="panel">
       <div class="panel-head">
@@ -192,7 +199,7 @@ function page(runId) {
         <span id="updated" class="eyebrow"></span>
       </div>
       <div class="table-wrap">
-        <table><thead><tr><th>ID</th><th>Label</th><th>Mode</th><th>Status</th><th>Tokens</th><th>Files</th><th>Branch</th><th>Warning</th></tr></thead><tbody id="agents"></tbody></table>
+        <table><thead><tr><th>ID</th><th>Label</th><th>Mode</th><th>Status</th><th>Tokens</th><th>Files</th><th>Branch</th><th>Warning</th><th>Actions</th></tr></thead><tbody id="agents"></tbody></table>
       </div>
     </section>
   </main>
@@ -212,11 +219,21 @@ function page(runId) {
       const s = await (await fetch('/state.json')).json();
       document.getElementById('title').textContent = s.name + ' / ' + s.run_id;
       const c = s.counts || {};
-      for (const key of ['done','failed','running','pending','stale']) document.getElementById(key).textContent = c[key] || 0;
+      for (const key of ['done','failed','running','pending','stale','stopped']) document.getElementById(key).textContent = c[key] || 0;
       document.getElementById('status').textContent = s.status || 'unknown';
       document.getElementById('updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
       const agents = s.agents || [];
-      document.getElementById('agents').innerHTML = agents.length ? agents.map(a => '<tr><td><a href="/agents/'+a.id+'">'+a.id+'</a></td><td>'+esc(a.label||'')+'</td><td>'+esc(a.mode||'')+'</td><td><span class="status '+esc(a.status||'pending')+'">'+esc(a.status||'pending')+'</span></td><td><code title="'+esc(tokensTitle(a))+'">'+esc(tokensText(a))+'</code></td><td><code title="'+esc(filesText(a))+'">'+esc(filesText(a))+'</code></td><td><code title="'+esc(a.branch||'')+'">'+esc(a.branch||'-')+'</code></td><td>'+esc(a.warning||'')+'</td></tr>').join('') : '<tr><td colspan="8" class="empty">No agents scheduled yet.</td></tr>';
+      document.getElementById('agents').innerHTML = agents.length ? agents.map(a => '<tr><td><a href="/agents/'+a.id+'">'+a.id+'</a></td><td>'+esc(a.label||'')+'</td><td>'+esc(a.mode||'')+'</td><td><span class="status '+esc(a.status||'pending')+'">'+esc(a.status||'pending')+'</span></td><td><code title="'+esc(tokensTitle(a))+'">'+esc(tokensText(a))+'</code></td><td><code title="'+esc(filesText(a))+'">'+esc(filesText(a))+'</code></td><td><code title="'+esc(a.branch||'')+'">'+esc(a.branch||'-')+'</code></td><td>'+esc(a.warning||'')+'</td><td>'+actions(a)+'</td></tr>').join('') : '<tr><td colspan="9" class="empty">No agents scheduled yet.</td></tr>';
+    }
+    document.addEventListener('click', event => {
+      const button = event.target.closest('[data-agent-action]');
+      if (button) control(button.dataset.agentId, button.dataset.agentAction);
+    });
+    async function control(id, action){ await fetch('/agents/'+encodeURIComponent(id)+'/'+action, { method: 'POST' }); await load(); }
+    function actions(a){
+      if (a.status === 'running') return '<button data-agent-id="'+esc(a.id)+'" data-agent-action="stop">Stop</button>';
+      if (['done','failed','stopped','stale'].includes(a.status)) return '<button data-agent-id="'+esc(a.id)+'" data-agent-action="rerun">Rerun</button>';
+      return '';
     }
     function tokensText(a){ return a.usage ? fmt(a.usage.total_tokens) : '-'; }
     function tokensTitle(a){ return a.usage ? 'input '+fmt(a.usage.input_tokens)+', cached '+fmt(a.usage.cached_input_tokens)+', output '+fmt(a.usage.output_tokens)+', reasoning '+fmt(a.usage.reasoning_output_tokens) : '-'; }
@@ -242,8 +259,10 @@ function agentPage(agent) {
   <p><a href="/">Back to dashboard</a></p>
   <h1>${escapeHtml(agent.id)} / ${escapeHtml(agent.status)}</h1>
   <p><b>Label:</b> ${escapeHtml(agent.label || "")}</p>
+  <p><b>PID:</b> <code>${escapeHtml(agent.pid || "")}</code></p>
   <p><b>Worktree:</b> <code>${escapeHtml(agent.worktree || "")}</code></p>
   <p><b>Branch:</b> <code>${escapeHtml(agent.branch || "")}</code></p>
+  <p>${agentAction(agent)}</p>
   <p><a href="/agents/${encodeURIComponent(agent.id)}/events">events.jsonl</a></p>
   <pre>${escapeHtml(JSON.stringify(agent, null, 2))}</pre>
 </main>
@@ -257,4 +276,14 @@ function agentPage(agent) {
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[c]));
+}
+
+function agentAction(agent) {
+  if (agent.status === "running") {
+    return `<button onclick="fetch('/agents/${encodeURIComponent(agent.id)}/stop',{method:'POST'}).then(()=>location.reload())">Stop</button>`;
+  }
+  if (["done", "failed", "stopped", "stale"].includes(agent.status)) {
+    return `<button onclick="fetch('/agents/${encodeURIComponent(agent.id)}/rerun',{method:'POST'}).then(()=>location.reload())">Rerun</button>`;
+  }
+  return "";
 }

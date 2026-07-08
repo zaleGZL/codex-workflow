@@ -79,6 +79,49 @@ process.stdin.on('end', () => {
   }
 });
 
+test("cli rerun-agent reruns a terminal agent", async () => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "codex-workflow-cli-rerun-"));
+  const bin = path.join(dir, "bin");
+  const oldPath = process.env.PATH;
+  const oldHome = process.env.CODEX_WORKFLOW_HOME;
+  process.env.PATH = `${bin}:${oldPath}`;
+  process.env.CODEX_WORKFLOW_HOME = path.join(dir, "workflow-home");
+  try {
+    await mkdir(bin);
+    const workflow = path.join(dir, "workflow.js");
+    await writeFile(workflow, `
+export default async ({ agent }) => agent("hello", { label: "one", mode: "read" });
+`);
+    const fake = path.join(bin, "codex");
+    await writeFile(fake, `#!/usr/bin/env node
+const fs = require('fs');
+if (process.argv.includes('--version')) process.exit(0);
+const out = process.argv[process.argv.indexOf('--output-last-message') + 1];
+process.stdin.resume();
+process.stdin.on('end', () => {
+  fs.writeFileSync(out, 'done');
+  console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }));
+});
+`);
+    await chmod(fake, 0o755);
+    const run = await runNode(["scripts/cli.mjs", "run", workflow, "--cwd", dir, "--run-id", "rerun-cli", "--no-serve"]);
+    assert.equal(run.code, 0);
+    const rerun = await runNode(["scripts/cli.mjs", "rerun-agent", "rerun-cli", "agent-001", "--cwd", dir]);
+    assert.equal(rerun.code, 0);
+    assert.equal(rerun.stdout.includes("rerun-cli"), true);
+  } finally {
+    process.env.PATH = oldPath;
+    restoreEnv("CODEX_WORKFLOW_HOME", oldHome);
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("cli stop-agent validates required args", async () => {
+  const result = await runNode(["scripts/cli.mjs", "stop-agent"]);
+  assert.notEqual(result.code, 0);
+  assert.equal(result.stderr.includes("usage: codex-workflow stop-agent"), true);
+});
+
 function restoreEnv(key, value) {
   if (value === undefined) delete process.env[key];
   else process.env[key] = value;

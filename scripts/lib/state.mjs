@@ -40,7 +40,7 @@ export async function writeState(cwd, state) {
 }
 
 export function countAgents(agents = []) {
-  const counts = { pending: 0, running: 0, done: 0, failed: 0, stale: 0 };
+  const counts = { pending: 0, running: 0, done: 0, failed: 0, stale: 0, stopped: 0 };
   for (const agent of agents) {
     if (counts[agent.status] !== undefined) counts[agent.status] += 1;
   }
@@ -50,7 +50,7 @@ export function countAgents(agents = []) {
 export function formatSummary(state) {
   const c = countAgents(state.agents);
   return [
-    `${state.name} ${state.status}  done:${c.done} failed:${c.failed} running:${c.running} pending:${c.pending} stale:${c.stale}`,
+    `${state.name} ${state.status}  done:${c.done} failed:${c.failed} running:${c.running} pending:${c.pending} stale:${c.stale} stopped:${c.stopped}`,
     `run_id: ${state.run_id}`,
     `cwd: ${state.cwd}`,
   ].join("\n");

@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createRun, requestPause, resumeRun } from "./lib/runtime.mjs";
+import { createRun, requestPause, rerunAgent, resumeRun, stopAgent } from "./lib/runtime.mjs";
 import { serve } from "./lib/server.mjs";
 import { formatSummary, readState, runsDir } from "./lib/state.mjs";
 
@@ -39,6 +39,24 @@ async function main() {
     if (!runId) throw new Error("usage: codex-workflow pause <run-id> [--cwd <path>]");
     const opts = parseOpts(args);
     const state = await requestPause(path.resolve(opts.cwd ?? process.cwd()), runId);
+    console.log(formatSummary(state));
+    return;
+  }
+  if (command === "stop-agent") {
+    const runId = args.shift();
+    const agentId = args.shift();
+    if (!runId || !agentId) throw new Error("usage: codex-workflow stop-agent <run-id> <agent-id> [--cwd <path>]");
+    const opts = parseOpts(args);
+    const state = await stopAgent(path.resolve(opts.cwd ?? process.cwd()), runId, agentId);
+    console.log(formatSummary(state));
+    return;
+  }
+  if (command === "rerun-agent") {
+    const runId = args.shift();
+    const agentId = args.shift();
+    if (!runId || !agentId) throw new Error("usage: codex-workflow rerun-agent <run-id> <agent-id> [--cwd <path>]");
+    const opts = parseOpts(args);
+    const state = await rerunAgent(path.resolve(opts.cwd ?? process.cwd()), runId, agentId, opts);
     console.log(formatSummary(state));
     return;
   }
@@ -97,6 +115,8 @@ Commands:
   serve <run-id> [--cwd <path>] [--port <port>] [--no-open]
   pause <run-id> [--cwd <path>]
   resume <run-id> [--cwd <path>]
+  stop-agent <run-id> <agent-id> [--cwd <path>]
+  rerun-agent <run-id> <agent-id> [--cwd <path>]
   list [--cwd <path>]`);
 }
 

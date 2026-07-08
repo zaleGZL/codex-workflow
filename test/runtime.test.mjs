@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createRun, requestPause, resumeRun } from "../scripts/lib/runtime.mjs";
+import { createRun, rerunAgent, requestPause, resumeRun, stopAgent } from "../scripts/lib/runtime.mjs";
 import { readState } from "../scripts/lib/state.mjs";
 
 test("runs a pipeline with fake codex and preserves ordered results", async () => {
@@ -121,6 +121,60 @@ export default async ({ review }) => review("focus on correctness", { label: "re
   }
 });
 
+test("stopAgent stops a running agent without failing the run", async () => {
+  const env = await setupFakeRepo();
+  const oldPath = process.env.PATH;
+  const oldHome = process.env.CODEX_WORKFLOW_HOME;
+  process.env.PATH = `${env.bin}:${oldPath}`;
+  process.env.CODEX_WORKFLOW_HOME = path.join(env.root, "workflow-home");
+  try {
+    const workflow = path.join(env.repo, "workflow.js");
+    await writeFile(workflow, `
+export const meta = { name: "stop-demo" };
+export default async ({ agent }) => agent("__wait__", { label: "long", mode: "read" });
+`);
+    const runId = "stop-run";
+    const run = createRun(workflow, { cwd: env.repo, runId });
+    await waitForAgentPid(env.repo, runId, "agent-001");
+    await stopAgent(env.repo, runId, "agent-001");
+    const state = await run;
+    assert.equal(state.status, "done");
+    assert.equal(state.agents[0].status, "stopped");
+    assert.equal(state.counts.stopped, 1);
+    assert.equal(Boolean(state.agents[0].pid), true);
+  } finally {
+    process.env.PATH = oldPath;
+    restoreEnv("CODEX_WORKFLOW_HOME", oldHome);
+    await rm(env.root, { recursive: true, force: true });
+  }
+});
+
+test("rerunAgent reruns a terminal agent", async () => {
+  const env = await setupFakeRepo();
+  const oldPath = process.env.PATH;
+  const oldHome = process.env.CODEX_WORKFLOW_HOME;
+  process.env.PATH = `${env.bin}:${oldPath}`;
+  process.env.CODEX_WORKFLOW_HOME = path.join(env.root, "workflow-home");
+  try {
+    const workflow = path.join(env.repo, "workflow.js");
+    await writeFile(workflow, `
+export const meta = { name: "rerun-demo" };
+export default async ({ agent }) => agent("prompt once", { label: "one", mode: "read" });
+`);
+    const runId = "rerun-run";
+    await createRun(workflow, { cwd: env.repo, runId });
+    const state = await rerunAgent(env.repo, runId, "agent-001");
+    assert.equal(state.status, "done");
+    assert.equal(state.agents[0].status, "done");
+    assert.equal(Boolean(state.agents[0].rerun_requested_at), true);
+    assert.equal(state.agents[0].result_path.endsWith("result.md"), true);
+  } finally {
+    process.env.PATH = oldPath;
+    restoreEnv("CODEX_WORKFLOW_HOME", oldHome);
+    await rm(env.root, { recursive: true, force: true });
+  }
+});
+
 function restoreEnv(key, value) {
   if (value === undefined) delete process.env[key];
   else process.env[key] = value;
@@ -153,11 +207,14 @@ if (process.argv[2] === 'review') {
   const out = process.argv[process.argv.indexOf('--output-last-message') + 1];
   let input = '';
   process.stdin.on('data', c => input += c);
-  process.stdin.on('end', () => setTimeout(() => {
-    fs.writeFileSync(out, 'result: ' + input);
-    console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, cached_input_tokens: 4, output_tokens: 5, reasoning_output_tokens: 2 } }));
-    console.log(JSON.stringify({ type: 'result', input }));
-  }, 50));
+  process.stdin.on('end', () => {
+    if (input.includes('__wait__')) setInterval(() => {}, 1000);
+    else setTimeout(() => {
+      fs.writeFileSync(out, 'result: ' + input);
+      console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 10, cached_input_tokens: 4, output_tokens: 5, reasoning_output_tokens: 2 } }));
+      console.log(JSON.stringify({ type: 'result', input }));
+    }, 50);
+  });
 }
 `);
   await chmod(fake, 0o755);
@@ -185,4 +242,14 @@ async function waitForAgent(repo, runId, count) {
     await new Promise(resolve => setTimeout(resolve, 20));
   }
   throw new Error("timed out waiting for agent");
+}
+
+async function waitForAgentPid(repo, runId, agentId) {
+  for (let i = 0; i < 100; i += 1) {
+    const state = await readState(repo, runId).catch(() => null);
+    const agent = state?.agents.find(a => a.id === agentId);
+    if (agent?.pid) return agent.pid;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  throw new Error("timed out waiting for agent pid");
 }

@@ -71,6 +71,54 @@ export async function clearPause(cwd, runId) {
   return state;
 }
 
+export async function stopAgent(cwd, runId, agentId) {
+  const state = await readState(cwd, runId);
+  const agent = state.agents.find(a => a.id === agentId);
+  if (!agent) throw new Error(`agent not found: ${agentId}`);
+  if (agent.status !== "running") throw new Error(`agent is not running: ${agentId}`);
+  if (!agent.pid) throw new Error(`agent has no pid: ${agentId}`);
+  agent.stop_requested = true;
+  agent.stop_requested_at = new Date().toISOString();
+  await writeState(cwd, state);
+  if (!processExists(agent.pid)) return markAgentStopped(cwd, runId, agentId);
+  try {
+    process.kill(agent.pid, "SIGTERM");
+  } catch {
+    return markAgentStopped(cwd, runId, agentId);
+  }
+  setTimeout(() => {
+    if (processExists(agent.pid)) {
+      try {
+        process.kill(agent.pid, "SIGKILL");
+      } catch {}
+    }
+  }, 500).unref();
+  return readState(cwd, runId);
+}
+
+export async function rerunAgent(cwd, runId, agentId, opts = {}) {
+  const state = await readState(cwd, runId);
+  const agent = state.agents.find(a => a.id === agentId);
+  if (!agent) throw new Error(`agent not found: ${agentId}`);
+  if (!["done", "failed", "stopped", "stale"].includes(agent.status)) {
+    throw new Error(`agent cannot be rerun from status ${agent.status}: ${agentId}`);
+  }
+  if (!["done", "failed", "paused"].includes(state.status)) {
+    throw new Error(`run must be done, failed, or paused to rerun an agent: ${runId}`);
+  }
+  agent.status = "stale";
+  agent.rerun_requested_at = new Date().toISOString();
+  delete agent.pid;
+  delete agent.exit_code;
+  delete agent.signal;
+  delete agent.ended_at;
+  delete agent.error;
+  delete agent.stop_requested;
+  delete agent.stop_requested_at;
+  await writeState(cwd, state);
+  return resumeRun(cwd, runId, opts);
+}
+
 async function runWorkflow(cwd, runId, opts) {
   const state = await readState(cwd, runId);
   const runtime = new Runtime(cwd, runId, opts);
@@ -257,7 +305,8 @@ class Runtime {
       const agents = state.agents.filter(a => a.id.startsWith(`${id}-`));
       phase.agents_done = agents.filter(a => a.status === "done").length;
       phase.agents_failed = agents.filter(a => a.status === "failed").length;
-      phase.status = phase.agents_done + phase.agents_failed >= phase.agents_total ? "done" : "running";
+      phase.agents_stopped = agents.filter(a => a.status === "stopped").length;
+      phase.status = phase.agents_done + phase.agents_failed + phase.agents_stopped >= phase.agents_total ? "done" : "running";
     });
   }
 
@@ -266,6 +315,7 @@ class Runtime {
     const existing = state.agents.find(a => a.id === job.id);
     if (existing?.status === "done") return readAgentResult(existing);
     if (existing?.status === "failed") return readAgentResult(existing);
+    if (existing?.status === "stopped") return readAgentResult(existing);
     if (state.pause_requested) {
       await this.upsertAgent({ ...job, status: "pending" });
       return { status: "pending", id: job.id };
@@ -297,12 +347,19 @@ class Runtime {
     }
     await this.upsertAgent(agent);
     const result = await runCodexAgent(agent, workdir, {
+      onPid: pid => this.upsertAgent({ id: agent.id, pid }),
       onUsage: usage => this.updateAgentUsage(agent.id, usage),
     });
+    const latestAgent = (await readState(this.cwd, this.runId)).agents.find(a => a.id === agent.id);
+    const stopped = latestAgent?.stop_requested === true;
     const finalAgent = {
       ...agent,
-      status: result.exitCode === 0 ? "done" : "failed",
+      pid: latestAgent?.pid ?? agent.pid,
+      stop_requested: latestAgent?.stop_requested,
+      stop_requested_at: latestAgent?.stop_requested_at,
+      status: stopped ? "stopped" : result.exitCode === 0 ? "done" : "failed",
       exit_code: result.exitCode,
+      signal: result.signal,
       error: result.error,
       usage: result.usage ?? agent.usage,
       ended_at: new Date().toISOString(),
@@ -310,7 +367,9 @@ class Runtime {
     await this.upsertAgent(finalAgent);
     return result.exitCode === 0
       ? readAgentResult(finalAgent)
-      : { status: "failed", id: finalAgent.id, error: result.error ?? `codex exited ${result.exitCode}` };
+      : stopped
+        ? { status: "stopped", id: finalAgent.id }
+        : { status: "failed", id: finalAgent.id, error: result.error ?? `codex exited ${result.exitCode}` };
   }
 
   async captureAgentCall(id, item, worker) {
@@ -356,6 +415,25 @@ class Runtime {
       await writeState(this.cwd, state);
     });
     return this.stateQueue;
+  }
+}
+
+async function markAgentStopped(cwd, runId, agentId) {
+  const state = await readState(cwd, runId);
+  const agent = state.agents.find(a => a.id === agentId);
+  if (!agent) throw new Error(`agent not found: ${agentId}`);
+  agent.status = "stopped";
+  agent.ended_at = agent.ended_at ?? new Date().toISOString();
+  await writeState(cwd, state);
+  return state;
+}
+
+function processExists(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
   }
 }
 

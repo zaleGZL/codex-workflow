@@ -80,6 +80,13 @@ node scripts/cli.mjs pause <run-id> --cwd .
 node scripts/cli.mjs resume <run-id> --cwd .
 ```
 
+Stop or rerun one agent:
+
+```bash
+node scripts/cli.mjs stop-agent <run-id> <agent-id> --cwd .
+node scripts/cli.mjs rerun-agent <run-id> <agent-id> --cwd .
+```
+
 List runs:
 
 ```bash

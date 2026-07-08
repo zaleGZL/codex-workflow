@@ -90,6 +90,10 @@ If `worktree: "never"` conflicts with overlapping files, the run continues and t
 
 `resume <run-id>` reloads the saved workflow and state. Done agents are reused. Pending agents run. Stale running agents from an interrupted process are rerun.
 
+`stop-agent <run-id> <agent-id>` requests a running agent stop. The agent keeps its `pid` in state and ends as `stopped` when the child process exits.
+
+`rerun-agent <run-id> <agent-id>` reruns one terminal agent (`done`, `failed`, `stopped`, or `stale`) when the run is `done`, `failed`, or `paused`. It marks that agent stale and resumes the saved workflow.
+
 ## Dashboard
 
 `run` starts a dashboard server immediately and opens it in the default browser. Reopen an existing run with:
@@ -116,6 +120,8 @@ Routes:
 - `/state.json`: raw state.
 - `/agents/<id>`: agent detail.
 - `/agents/<id>/events`: raw Codex JSONL events.
+- `POST /agents/<id>/stop`: stop one running agent.
+- `POST /agents/<id>/rerun`: rerun one terminal agent.
 - `POST /pause`: request pause.
 - `POST /resume`: continue.
 
@@ -123,4 +129,4 @@ Routes:
 
 ## Limits
 
-V1 does not auto-merge edit branches, kill individual agents, or guarantee conflict-free edits when `worktree: "never"` is forced.
+V1 does not auto-merge edit branches, rerun individual agents while the run is still running, or guarantee conflict-free edits when `worktree: "never"` is forced.

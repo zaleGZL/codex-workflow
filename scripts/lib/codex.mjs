@@ -42,6 +42,7 @@ export async function runCodexAgent(agent, workdir, options = {}) {
     const child = spawn("codex", buildCodexArgs(agent, workdir), {
       stdio: ["pipe", "pipe", "pipe"],
     });
+    options.onPid?.(child.pid);
     const events = createWriteStream(agent.events_path, { flags: "a" });
     let stdoutBuffer = "";
     let usage = null;
@@ -66,14 +67,14 @@ export async function runCodexAgent(agent, workdir, options = {}) {
       events.end();
       resolve({ exitCode: 127, error: error.message });
     });
-    child.on("exit", code => {
+    child.on("exit", (code, signal) => {
       const next = extractUsage(stdoutBuffer);
       if (next) {
         usage = next;
         options.onUsage?.(next);
       }
       events.end();
-      resolve({ exitCode: code ?? 1, usage });
+      resolve({ exitCode: code ?? 1, signal, usage });
     });
   });
 }
